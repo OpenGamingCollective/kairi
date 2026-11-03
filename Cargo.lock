@@ -273,6 +273,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "kairi"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "env_logger",
+ "serde",
+ "strum",
+ "tokio",
+ "toml",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.189"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -308,19 +321,6 @@ dependencies = [
  "libc",
  "wasi",
  "windows-sys",
-]
-
-[[package]]
-name = "ogc-bot"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "env_logger",
- "serde",
- "strum",
- "tokio",
- "toml",
 ]
 
 [[package]]

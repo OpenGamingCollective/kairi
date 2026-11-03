@@ -1,5 +1,5 @@
 [package]
-name = "ogc-bot"
+name = "kairi"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
