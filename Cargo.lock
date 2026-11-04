@@ -279,9 +279,19 @@ dependencies = [
  "anyhow",
  "clap",
  "env_logger",
+ "kairi-config",
  "serde",
  "strum",
  "tokio",
+ "toml",
+]
+
+[[package]]
+name = "kairi-config"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
  "toml",
 ]
 
