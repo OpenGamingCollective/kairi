@@ -6,7 +6,7 @@ pub struct Config {
     pub discord: DiscordConfig,
     pub github: GithubConfig,
     pub clef: JevConfig,
-    pub cloudflare: CloudflareConfig
+    pub cloudflare: CloudflareConfig,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize, Clone)]
