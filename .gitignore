@@ -21,3 +21,5 @@ target
 #.idea/
 
 .direnv
+
+config.toml

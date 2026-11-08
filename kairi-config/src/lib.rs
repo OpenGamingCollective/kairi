@@ -5,26 +5,13 @@ use serde::{Deserialize, Serialize};
 pub struct Config {
     pub discord: DiscordConfig,
     pub github: GithubConfig,
-    pub clef: JevConfig,
-    pub cloudflare: CloudflareConfig,
+    #[serde(default)]
+    pub typesafe: TypesafeConfig,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize, Clone)]
-pub struct JevConfig {
-    pub model: String,
-    pub provider: JevProvider,
-}
-
-#[derive(Debug, Default, Deserialize, Serialize, Clone)]
-pub enum JevProvider {
-    #[default]
-    Cloudflare,
-    TypesafeAi,
-}
-
-#[derive(Debug, Default, Deserialize, Serialize, Clone)]
-/// Cloudflare account config used for clef
-pub struct CloudflareConfig {
+/// TypeSafe account config used for Jev
+pub struct TypesafeConfig {
     pub account_id: String,
     pub token: String,
 }

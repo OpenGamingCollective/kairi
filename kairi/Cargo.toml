@@ -16,4 +16,5 @@ serde.workspace = true
 env_logger.workspace = true
 toml.workspace = true
 strum.workspace = true
-kairi-config = {path = "../kairi-config"}
+typesafe-api.workspace = true
+kairi-config = { path = "../kairi-config" }
