@@ -24,4 +24,6 @@ toml = "1.0.3"
 strum = { version = "0.28", features = ["derive"] }
 clap = { version = "4.6.1", features = ["derive"] }
 thiserror = "2.0.21"
+kameo = { version = "0.22.2", features = ["console"] }
+poise = "0.7.1"
 typesafe-api = { git = "https://github.com/luytan/typesafe-api" }

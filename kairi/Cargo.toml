@@ -17,6 +17,9 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 toml.workspace = true
 strum.workspace = true
+kameo.workspace = true
+poise.workspace = true
 typesafe-api.workspace = true
+
 
 kairi-config = { path = "../kairi-config" }
