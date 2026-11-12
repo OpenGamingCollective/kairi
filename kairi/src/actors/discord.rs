@@ -19,6 +19,10 @@ impl Actor for DiscordActor {
     type Args = DiscordArgs;
     type Error = anyhow::Error;
 
+    fn name() -> &'static str {
+        "discord-bot"
+    }
+
     async fn on_start(
         args: Self::Args,
         _actor_ref: kameo::prelude::ActorRef<Self>,

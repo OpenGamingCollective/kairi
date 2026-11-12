@@ -26,6 +26,10 @@ impl Actor for Kairi {
     type Args = KairiArg;
     type Error = Box<dyn std::error::Error + Send + Sync>;
 
+    fn name() -> &'static str {
+        "kairi"
+    }
+
     fn supervision_strategy() -> SupervisionStrategy {
         // No need to restart every actors if one fails
         SupervisionStrategy::OneForOne
