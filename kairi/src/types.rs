@@ -23,7 +23,7 @@ impl Display for MailingListEnum {
             Self::Governance => write!(f, "governance"),
             Self::Conventions => write!(f, "conventions"),
             Self::Kernel => write!(f, "kernel"),
-            Self::KernelUnstable => writeln!(f, "kernel-unstable"),
+            Self::KernelUnstable => write!(f, "kernel-unstable"),
             Self::Asusctl => write!(f, "asusctl"),
         }
     }
