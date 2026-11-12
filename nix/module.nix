@@ -155,17 +155,25 @@
             UMask = "0077";
             NoNewPrivileges = true;
             WorkingDirectory = cfg.dataDir;
+            RestrictAddressFamilies = [
+              "AF_INET"
+              "AF_INET6"
+            ];
             PrivateTmp = true;
-            PrivateNetwork = true;
+            PrivateDevices = true;
             ProtectSystem = "strict";
+            ProtectHome = "true";
             ProtectClock = true;
-            ProtectKernelLogs = true;
             ProtectControlGroups = true;
             ProtectKernelModules = true;
+            ProtectKernelTunables = true;
+            ProtectKernelLogs = true;
+            ProtectProc = "invisible";
             RestrictNamespaces = true;
             RestrictRealtime = true;
             RestrictSUIDSGID = true;
             LockPersonality = true;
+            MemoryDenyWriteExecute=true;
           };
         };
       };
