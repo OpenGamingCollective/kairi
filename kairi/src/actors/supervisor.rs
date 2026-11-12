@@ -14,7 +14,7 @@ use crate::{
         discord::{DiscordActor, DiscordArgs},
         public_inbox_mirror::{PublicInboxMirror, PublicInboxMirrorArgs},
     },
-    types::MailingListEnum,
+    types::{MailingListEnum, MailingLists},
 };
 
 #[derive(Default)]
@@ -57,10 +57,12 @@ impl Actor for Kairi {
         .spawn()
         .await;
 
-        let public_inbox_mirror = PublicInboxMirror::supervise(
+        let _public_inbox_mirror = PublicInboxMirror::supervise(
             &actor_ref,
             PublicInboxMirrorArgs {
                 repositories: [MailingListEnum::Governance].to_vec(),
+                // Shared with the actors that read the lists
+                lists: MailingLists::default(),
             },
         )
         .restart_policy(RestartPolicy::Permanent)
