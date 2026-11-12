@@ -14,6 +14,7 @@
           fenixpkgs
           pkgs.just
         ];
+        RUST_SRC_PATH = "${fenixpkgs}/lib/rustlib/src/rust/library";
       };
     };
 }
