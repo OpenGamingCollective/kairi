@@ -9,7 +9,13 @@ use std::{
     time::Duration,
 };
 
-use crate::actors::discord::{DiscordActor, DiscordArgs};
+use crate::{
+    actors::{
+        discord::{DiscordActor, DiscordArgs},
+        public_inbox_mirror::{PublicInboxMirror, PublicInboxMirrorArgs},
+    },
+    types::MailingListEnum,
+};
 
 #[derive(Default)]
 pub struct Kairi {
@@ -35,10 +41,7 @@ impl Actor for Kairi {
         SupervisionStrategy::OneForOne
     }
 
-    async fn on_start(
-        args: Self::Args,
-        actor_ref: ActorRef<Self>,
-    ) -> Result<Self, Self::Error> {
+    async fn on_start(args: Self::Args, actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
         let kairi = Self::default();
 
         let _ = kairi.config.set(args.config.clone());
@@ -47,6 +50,17 @@ impl Actor for Kairi {
             &actor_ref,
             DiscordArgs {
                 token: args.config.discord.token,
+            },
+        )
+        .restart_policy(RestartPolicy::Permanent)
+        .restart_limit(5, Duration::from_secs(10))
+        .spawn()
+        .await;
+
+        let public_inbox_mirror = PublicInboxMirror::supervise(
+            &actor_ref,
+            PublicInboxMirrorArgs {
+                repositories: [MailingListEnum::Governance].to_vec(),
             },
         )
         .restart_policy(RestartPolicy::Permanent)
