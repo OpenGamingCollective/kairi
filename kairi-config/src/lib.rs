@@ -12,7 +12,6 @@ pub struct Config {
 #[derive(Debug, Default, Deserialize, Serialize, Clone)]
 /// TypeSafe account config used for Jev
 pub struct TypesafeConfig {
-    pub account_id: String,
     pub token: String,
 }
 

@@ -1,17 +1,32 @@
 use std::{fs, path::Path};
 
 use anyhow::Result;
+use clap::Parser;
+
+use crate::args::Args;
+
+mod args;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     println!("hello world!");
+    let arg = Args::parse();
 
-    let file_content = fs::read_to_string(Path::new("./config.toml"))?;
+    let file_content = match arg.config {
+        Some(path) => {
+            println!("config file specified, using {path}");
+            fs::read_to_string(Path::new(&path))
+        }
+        None => {
+            println!("no config file specified, using default /etc/kairi/config.toml");
+            fs::read_to_string(Path::new("/etc/kairi/config.toml"))
+        }
+    }?;
 
     let config = kairi_config::Config::build(&file_content)?;
 
     let client = typesafe_api::TypeSafeClient::build(
-        &config.typesafe.account_id,
+        "https://api.typesafe.ai/v1/systemone",
         &config.typesafe.token,
     );
 
