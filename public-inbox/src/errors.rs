@@ -1,45 +1,32 @@
 use std::io;
 
-use reqwest::StatusCode;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum MailingListError {
-    #[error("IO error {0}")]
-    Disconnect(#[from] io::Error),
+    #[error("io: {0}")]
+    Io(#[from] io::Error),
 
-    #[error("failed to parse url {0}")]
-    UrlParseError(#[from] url::ParseError),
+    #[error("http: {0}")]
+    Http(#[from] reqwest::Error),
 
-    #[error("reqwest error {0}")]
-    ReqwestError(#[from] reqwest::Error),
+    #[error("json: {0}")]
+    Json(#[from] serde_json::Error),
 
-    #[error("serde_json error {0}")]
-    SerdeJsonError(#[from] serde_json::Error),
+    #[error("git: {0}")]
+    Git(#[from] gix::Error),
+
+    #[error("background task: {0}")]
+    Join(#[from] tokio::task::JoinError),
 
     #[error("failed to parse mail")]
     MailParseFailed,
 
-    #[error("thread contained no mail")]
-    ThreadEmpty,
+    #[error("manifest lists no epochs")]
+    NoEpochs,
 
-    #[error("could not find the first message")]
-    NoFirstMessageFound,
-
-    #[error("could not get the first message date")]
-    NoFirstMessageDate,
-
-    #[error("could not convert the mail dt to chrono")]
-    DtToChronoError,
-
-    #[error("{0} return code is not OK: {1}")]
-    UrlStatusCodeError(String, StatusCode),
-
-    #[error("uid cannot be empty")]
-    ThreadUidEmpty,
-
-    #[error("thread with uid {0} not found")]
-    ThreadNotFound(String),
+    #[error("epoch {0} is not mirrored")]
+    EpochNotFound(u32),
 }
 
 pub type Result<T, E = MailingListError> = std::result::Result<T, E>;

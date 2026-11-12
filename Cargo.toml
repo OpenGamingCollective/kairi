@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["kairi"]
+members = ["kairi", "public-inbox"]
 
 
 [workspace.package]
@@ -27,3 +27,15 @@ thiserror = "2.0.21"
 kameo = { version = "0.22.2", features = ["console"] }
 poise = "0.7.1"
 typesafe-api = { git = "https://github.com/luytan/typesafe-api" }
+reqwest = "0.13.5"
+gix = { version = "0.90.0", default-features = false, features = [
+    "sha1",
+    "parallel",
+    "tracing",
+    "blocking-http-transport-reqwest-rust-tls",
+] }
+mail-parser = "1.0.1"
+flate2 = "1.1.11"
+sha2 = "0.11.1"
+chrono = { version = "0.4.45", default-features = false, features = ["std"] }
+tempfile = "3.27"

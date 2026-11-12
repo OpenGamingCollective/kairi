@@ -1,72 +1,53 @@
-//! Handle scraping a mailing list
+//! Handle mirroring a mailing list
 
-use std::str::FromStr;
-
-use reqwest::{Client, StatusCode};
-use scraper::{Html, Selector};
-use tokio::sync::RwLock;
-use url::Url;
-
-use crate::{
-    errors::{MailingListError, Result},
-    message::{fetch_messages, mbox_url},
-    thread::Thread,
+use std::{
+    path::PathBuf,
+    sync::{Arc, Mutex, MutexGuard, PoisonError},
 };
+
+use mail_parser::Message;
+use reqwest::Client;
+
+use crate::{errors::Result, manifest, message::Mail, mirror::Mirror, thread::Thread};
 
 /// Represent a mailing list
 #[derive(Debug)]
 pub struct MailingList {
-    url: Url,
+    url: String,
     client: Client,
     name: String,
     description: String,
-    threads: RwLock<Vec<Thread>>,
+    mirror: Arc<Mutex<Mirror>>,
+    /// Only one fetch at a time touches the repositories
+    syncing: Arc<Mutex<()>>,
 }
 
 impl MailingList {
-    pub async fn build(url: &str, client_name: &str) -> Result<Self> {
-        let mut url = Url::from_str(url)?;
-
-        if !url.path().ends_with('/') {
-            url.set_path(&format!("{}/", url.path()));
-        }
-
-        let res = reqwest::get(url.clone()).await?;
-
-        if res.status() != StatusCode::OK {
-            return Err(MailingListError::UrlStatusCodeError(
-                url.to_string(),
-                res.status(),
-            ));
-        }
-
-        let html = res.text().await?;
-
-        let name = url
-            .path_segments()
-            .and_then(|mut segments| segments.rfind(|s| !s.is_empty()))
-            .unwrap_or_default()
-            .to_string();
-        let description = list_description(&html);
+    /// Mirror the list at `url` into `dir`, a new mirror starts with everything seen
+    pub async fn build(url: &str, dir: impl Into<PathBuf>, client_name: &str) -> Result<Self> {
+        let url = url.trim_end_matches('/');
+        let name = url.rsplit('/').next().unwrap_or_default().to_string();
+        let url = format!("{url}/");
 
         let client = Client::builder().user_agent(client_name).build()?;
+        let (description, epochs) = manifest::fetch(&client, &url).await?;
 
-        Ok(Self {
+        let list = Self {
+            mirror: Arc::new(Mutex::new(Mirror::open(url.clone(), dir.into())?)),
             url,
             client,
             name,
             description,
-            threads: RwLock::default(),
-        })
+            syncing: Arc::default(),
+        };
+        list.update(epochs).await?;
+        list.lock().finish_first_start()?;
+
+        Ok(list)
     }
 
-    pub fn url(&self) -> Url {
-        self.url.clone()
-    }
-
-    /// HTTP client used by this list, shared by callers to fetch thread data
-    pub fn client(&self) -> &Client {
-        &self.client
+    pub fn url(&self) -> &str {
+        &self.url
     }
 
     /// Name of the mailing list, taken from the last URL path segment
@@ -74,112 +55,68 @@ impl MailingList {
         &self.name
     }
 
-    /// Description of the mailing list, taken from the list page title
+    /// Description of the mailing list, taken from its manifest
     pub fn description(&self) -> &str {
         &self.description
     }
 
-    /// Get the threads
-    pub async fn threads(&self) -> Vec<Thread> {
-        self.threads.read().await.clone()
+    /// Get the threads, sorted by the date of their root
+    pub fn threads(&self) -> Vec<Thread> {
+        self.lock().threads.all()
     }
 
     /// Get a thread using its uid
-    pub async fn get_thread(&self, uid: &str) -> Result<Thread> {
-        if uid.is_empty() {
-            return Err(MailingListError::ThreadUidEmpty);
-        }
+    pub fn get_thread(&self, uid: &str) -> Option<Thread> {
+        self.lock().threads.get(uid).cloned()
+    }
 
-        // Scan the threads if vec is empty
-        {
-            let lock = self.threads.read().await;
-            if lock.is_empty() {
-                drop(lock);
-                self.get_all_threads().await?;
+    /// Bring the mirror up to date with the list
+    pub async fn fetch(&self) -> Result<()> {
+        let (_, epochs) = manifest::fetch(&self.client, &self.url).await?;
+        self.update(epochs).await
+    }
+
+    /// Mails not marked as seen yet, in archive order
+    pub fn pending(&self) -> Vec<Mail> {
+        self.lock().unseen.clone()
+    }
+
+    /// Persist that `mail` and the ones before it were handled, a no-op if they already were
+    pub fn mark_seen(&self, mail: &Mail) -> Result<()> {
+        self.lock().mark_seen(mail)
+    }
+
+    /// Read a whole mail from the mirror
+    pub fn message(&self, mail: &Mail) -> Result<Message<'static>> {
+        self.lock().message(mail)
+    }
+
+    fn lock(&self) -> MutexGuard<'_, Mirror> {
+        lock(&self.mirror)
+    }
+
+    /// Fetch without holding the lock, then index
+    async fn update(&self, epochs: Vec<u32>) -> Result<()> {
+        let syncing = self.syncing.clone();
+        let mirror = self.mirror.clone();
+        let url = self.url.clone();
+
+        // Locked in the task, so a cancelled sync keeps it until the fetch ends
+        tokio::task::spawn_blocking(move || {
+            let _syncing = lock(&syncing);
+            let epochs = lock(&mirror).to_fetch(&epochs)?;
+            for epoch in &epochs {
+                epoch.fetch(&url)?;
             }
-        }
 
-        let lock = self.threads.read().await;
-
-        lock.iter()
-            .find(|t| t.uid() == uid)
-            .cloned()
-            .ok_or_else(|| MailingListError::ThreadNotFound(uid.to_string()))
-    }
-
-    /// Fetch all threads of a mailing list
-    // TODO: handle multiple pages
-    pub async fn get_all_threads(&self) -> Result<Vec<Thread>> {
-        let html = self
-            .client
-            .get(self.url.clone())
-            .send()
-            .await?
-            .error_for_status()?
-            .text()
-            .await?;
-
-        let urls = thread_urls(&html, &self.url)?;
-
-        let mut threads: Vec<Thread> = Vec::new();
-
-        for url in urls {
-            let messages = match fetch_messages(&self.client, &mbox_url(&url)?).await {
-                Ok(messages) => messages,
-                Err(error) => {
-                    eprintln!("skipping thread {url}: {error}");
-                    continue;
-                }
-            };
-
-            threads.push(Thread::from_url(url.as_str(), &messages)?);
-        }
-
-        let mut lock = self.threads.write().await;
-
-        *lock = threads.clone();
-
-        Ok(threads)
+            let mut mirror = lock(&mirror);
+            mirror.add(epochs);
+            mirror.index()
+        })
+        .await?
     }
 }
 
-/// List description scraped from a list page's `<title>`
-fn list_description(html: &str) -> String {
-    let document = Html::parse_document(html);
-
-    let title_selector = Selector::parse("title").unwrap();
-
-    document
-        .select(&title_selector)
-        .next()
-        .map(|title| title.text().collect::<String>().trim().to_string())
-        .unwrap_or_default()
-}
-
-/// Thread URLs scraped from a list page
-fn thread_urls(html: &str, base: &Url) -> Result<Vec<Url>> {
-    let document = Html::parse_document(html);
-
-    let thread_selector = Selector::parse(r#"pre > a[href*="/T/"]"#).unwrap();
-
-    let mut urls: Vec<Url> = Vec::new();
-
-    for link in document.select(&thread_selector) {
-        let Some(sibling) = link.next_sibling() else {
-            continue;
-        };
-
-        let Some(text) = sibling.value().as_text() else {
-            continue;
-        };
-
-        let metadata = text.trim_start().lines().next().unwrap_or("");
-        if !metadata.contains(" UTC") {
-            continue;
-        }
-        let href = link.value().attr("href").unwrap();
-        urls.push(base.join(href)?);
-    }
-
-    Ok(urls)
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
