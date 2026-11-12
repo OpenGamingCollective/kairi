@@ -155,6 +155,7 @@
             UMask = "0077";
             NoNewPrivileges = true;
             WorkingDirectory = cfg.dataDir;
+            ReadWritePaths = [ cfg.dataDir ];
             RestrictAddressFamilies = [
               "AF_INET"
               "AF_INET6"
@@ -173,7 +174,7 @@
             RestrictRealtime = true;
             RestrictSUIDSGID = true;
             LockPersonality = true;
-            MemoryDenyWriteExecute=true;
+            MemoryDenyWriteExecute = true;
           };
         };
       };
