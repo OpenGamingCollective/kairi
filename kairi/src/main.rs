@@ -49,7 +49,7 @@ async fn main() -> Result<()> {
     if arg.test {
         return match kairi_config::Config::build(&file_content) {
             Ok(_) => {
-                println!("config parsed correctly");
+                info!("config parsed correctly");
                 Ok(())
             }
             Err(err) => Err(anyhow!(err)),
