@@ -39,7 +39,7 @@ impl ConfigFile {
 /*
     Config is the struct exposed to the callers
 */
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct Config {
     pub discord: DiscordConfig,
     pub github: GithubConfig,
