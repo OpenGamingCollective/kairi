@@ -8,4 +8,7 @@ pub struct Args {
 
     #[arg(short, long)]
     pub test: bool,
+
+    #[arg(short, long)]
+    pub debug: bool,
 }

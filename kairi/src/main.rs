@@ -1,7 +1,10 @@
-use std::{fs, path::Path};
+use std::path::Path;
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use clap::Parser;
+use tokio::fs;
+use tracing::{Level, error, info};
+use tracing_subscriber::FmtSubscriber;
 
 use crate::args::Args;
 
@@ -11,14 +14,21 @@ mod args;
 async fn main() -> Result<()> {
     let arg = Args::parse();
 
+    let log_level = if arg.debug { Level::TRACE } else { Level::INFO };
+
+    let subscriber = FmtSubscriber::builder().with_max_level(log_level).finish();
+
+    tracing::subscriber::set_global_default(subscriber)
+        .context("setting default subscriber failed")?;
+
     let file_content = match arg.config {
         Some(path) => {
-            println!("config file specified, using {path}");
-            fs::read_to_string(Path::new(&path))
+            info!("config file specified, using {path}");
+            fs::read_to_string(Path::new(&path)).await
         }
         None => {
-            println!("no config file specified, using default /etc/kairi/config.toml");
-            fs::read_to_string(Path::new("/etc/kairi/config.toml"))
+            info!("no config file specified, using default /etc/kairi/config.toml");
+            fs::read_to_string(Path::new("/etc/kairi/config.toml")).await
         }
     }?;
     // Return the parsing result
@@ -45,7 +55,16 @@ async fn main() -> Result<()> {
         .noul("language", "is Linux built in Go?", None)
         .build();
 
-    println!("typesafe endpoint: {:?}", request.send(client).await?);
+    let res = request.send(client).await;
+
+    match res {
+        Ok(response) => {
+            info!("typesafe response: {:#?}", response)
+        }
+        Err(err) => {
+            error!("typesafe error: {:#?}", err)
+        }
+    }
 
     Ok(())
 }
