@@ -22,9 +22,6 @@ pub enum MailingListError {
     #[error("failed to parse mail")]
     MailParseFailed,
 
-    #[error("manifest lists no epochs")]
-    NoEpochs,
-
     #[error("epoch {0} is not mirrored")]
     EpochNotFound(u32),
 }

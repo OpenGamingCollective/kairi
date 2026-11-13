@@ -2,12 +2,13 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::message::Mail;
 
 /// Representation of a mailing list thread
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Thread {
     uid: String,
     mails: Vec<Mail>,
@@ -55,6 +56,30 @@ impl Thread {
     /// Every mail of the thread, root first
     pub fn mails(&self) -> &[Mail] {
         &self.mails
+    }
+}
+
+/// What a list of threads shows of each one, without its mails
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThreadSummary {
+    pub uid: String,
+    pub name: String,
+    pub author: String,
+    pub date: DateTime<Utc>,
+    pub url: String,
+    pub mails: usize,
+}
+
+impl From<&Thread> for ThreadSummary {
+    fn from(thread: &Thread) -> Self {
+        Self {
+            uid: thread.uid.clone(),
+            name: thread.name().to_string(),
+            author: thread.author().to_string(),
+            date: thread.date(),
+            url: thread.url(),
+            mails: thread.mails.len(),
+        }
     }
 }
 
@@ -139,6 +164,7 @@ impl Threads {
         })
     }
 
+    #[cfg(test)]
     pub fn get(&self, uid: &str) -> Option<&Thread> {
         self.visible().find(|thread| thread.uid == uid)
     }
@@ -173,8 +199,6 @@ mod tests {
             url: format!("https://l/list/{id}/"),
             epoch: 0,
             blob: ObjectId::null(gix::hash::Kind::Sha1),
-            commit: ObjectId::null(gix::hash::Kind::Sha1),
-            seq: 0,
             parents: parents.iter().map(ToString::to_string).collect(),
         }
     }

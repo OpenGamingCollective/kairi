@@ -1,9 +1,9 @@
 //! One git repository of a mailing list, each commit is a mail
 
-use std::{fs, path::Path, sync::atomic::AtomicBool};
+use std::{fs, io, path::Path, sync::atomic::AtomicBool, time::Instant};
 
 use gix::{ObjectId, Repository, progress::Discard};
-use tracing::{debug, warn};
+use tracing::{debug, info, instrument, warn};
 
 use crate::{
     errors::Result,
@@ -17,13 +17,10 @@ const MASTER: &str = "refs/heads/master";
 pub(crate) struct Epoch {
     pub number: u32,
     repo: Repository,
-    /// Last commit the mirror indexed
-    pub indexed: Option<ObjectId>,
 }
 
 /// A commit adding or deleting a mail
 pub(crate) struct Entry {
-    pub commit: ObjectId,
     blob: ObjectId,
     pub deleted: bool,
     time: i64,
@@ -36,6 +33,7 @@ impl Epoch {
         if path.exists() {
             remove_stale_locks(&path)?;
         } else {
+            debug!(epoch = number, "creating the repository");
             // Created aside then renamed, a crash never leaves a broken repository
             let tmp = path.with_extension("tmp");
             if tmp.exists() {
@@ -49,12 +47,54 @@ impl Epoch {
         Ok(Self {
             number,
             repo: gix::open_opts(path, gix::open::Options::isolated())?,
-            indexed: None,
         })
     }
 
+    /// Open without creating it nor touching its locks, `None` if it isn't mirrored
+    pub fn open_readonly(dir: &Path, number: u32) -> Result<Option<Self>> {
+        let path = dir.join(format!("git/{number}.git"));
+        if !path.exists() {
+            return Ok(None);
+        }
+        Ok(Some(Self {
+            number,
+            repo: gix::open_opts(path, gix::open::Options::isolated())?,
+        }))
+    }
+
+    /// Numbers of the epochs mirrored in `dir`, oldest first
+    pub fn mirrored(dir: &Path) -> Result<Vec<u32>> {
+        let entries = match fs::read_dir(dir.join("git")) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error.into()),
+        };
+        let mut numbers = Vec::new();
+        for entry in entries {
+            let name = entry?.file_name();
+            // `<n>.tmp` is a creation that never finished
+            if let Some(number) = name
+                .to_str()
+                .and_then(|name| name.strip_suffix(".git"))
+                .and_then(|number| number.parse().ok())
+            {
+                numbers.push(number);
+            }
+        }
+        numbers.sort_unstable();
+        Ok(numbers)
+    }
+
+    #[instrument(level = "debug", skip_all, fields(epoch = self.number))]
     pub fn fetch(&self, list_url: &str) -> Result<()> {
-        debug!(list = list_url, epoch = self.number, "fetching");
+        let before = self.head()?;
+        if before.is_none() {
+            info!("cloning");
+        } else {
+            debug!("fetching");
+        }
+        let started = Instant::now();
+
         self.repo
             .remote_at(format!("{list_url}git/{}.git", self.number))?
             // Forced, purging a mail rewrites history
@@ -65,25 +105,33 @@ impl Epoch {
             .connect(gix::remote::Direction::Fetch)?
             .prepare_fetch(Discard, Default::default())?
             .receive(Discard, &AtomicBool::new(false))?;
+
+        let after = self.head()?;
+        let elapsed_ms = started.elapsed().as_millis();
+        match (before, after) {
+            (None, _) => info!(elapsed_ms, "cloned"),
+            (Some(before), Some(after)) if before != after => {
+                info!(%before, %after, elapsed_ms, "fetched new commits");
+            }
+            _ => debug!(elapsed_ms, "already up to date"),
+        }
         Ok(())
     }
 
-    fn head(&self) -> Result<Option<ObjectId>> {
+    /// Tip of the epoch, `None` before its first fetch
+    pub fn head(&self) -> Result<Option<ObjectId>> {
         Ok(self
             .repo
             .try_find_reference(MASTER)?
             .and_then(|head| head.try_id().map(gix::Id::detach)))
     }
 
-    /// Commits since `indexed`, oldest first, `None` if that one is gone
-    pub fn walk(&self) -> Result<Option<Vec<Entry>>> {
+    /// Every commit, oldest first, purges included
+    pub fn walk(&self) -> Result<Vec<Entry>> {
         let mut entries = Vec::new();
         let mut next = self.head()?;
 
         while let Some(id) = next {
-            if Some(id) == self.indexed {
-                break;
-            }
             let commit = self.repo.find_commit(id)?;
             let tree = commit.tree()?;
             let mail = match tree.find_entry("m") {
@@ -92,7 +140,6 @@ impl Epoch {
             };
             if let Some((blob, deleted)) = mail {
                 entries.push(Entry {
-                    commit: id,
                     blob,
                     deleted,
                     time: commit.time()?.seconds,
@@ -101,11 +148,8 @@ impl Epoch {
             next = commit.parent_ids().next().map(gix::Id::detach);
         }
 
-        if next.is_none() && self.indexed.is_some() {
-            return Ok(None);
-        }
         entries.reverse();
-        Ok(Some(entries))
+        Ok(entries)
     }
 
     pub fn blob(&self, id: ObjectId) -> Result<Vec<u8>> {
@@ -118,14 +162,7 @@ impl Epoch {
         if raw.is_empty() {
             return Ok(None);
         }
-        let mail = message::index(
-            raw,
-            list_url,
-            self.number,
-            entry.blob,
-            entry.commit,
-            entry.time,
-        );
+        let mail = message::index(raw, list_url, self.number, entry.blob, entry.time);
         if mail.is_none() {
             warn!(list = list_url, blob = %entry.blob, "skipping mail without a Message-ID");
         }
@@ -133,7 +170,7 @@ impl Epoch {
     }
 }
 
-/// Only we write to the mirror, so any lock left is from a crash
+/// Only the mirror writes, the reader opens read-only, so any lock left is from a crash
 fn remove_stale_locks(dir: &Path) -> Result<()> {
     for entry in fs::read_dir(dir)? {
         let path = entry?.path();
@@ -213,20 +250,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn walk_returns_new_commits_then_detects_rewrites() {
+    fn walk_returns_every_commit_oldest_first() {
         let dir = tempfile::tempdir().unwrap();
-        let mut epoch = Epoch::open(dir.path(), 0).unwrap();
+        let epoch = Epoch::open(dir.path(), 0).unwrap();
         epoch.archive(&["a", "b"]);
         epoch.delete("a");
 
-        let entries = epoch.walk().unwrap().unwrap();
+        let entries = epoch.walk().unwrap();
         let deleted: Vec<bool> = entries.iter().map(|entry| entry.deleted).collect();
         assert_eq!(deleted, [false, false, true]);
 
-        epoch.indexed = entries.last().map(|entry| entry.commit);
-        assert!(epoch.walk().unwrap().unwrap().is_empty());
         epoch.rewrite(&["a"]);
-        assert!(epoch.walk().unwrap().is_none());
+        let entries = epoch.walk().unwrap();
+        let deleted: Vec<bool> = entries.iter().map(|entry| entry.deleted).collect();
+        assert_eq!(deleted, [false]);
     }
 
     #[test]

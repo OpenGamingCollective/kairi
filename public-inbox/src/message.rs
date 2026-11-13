@@ -5,6 +5,7 @@ use std::{fmt::Write, sync::LazyLock};
 use chrono::{DateTime, Utc};
 use gix::ObjectId;
 use mail_parser::{HeaderForm, Message, MessageParser};
+use serde::{Deserialize, Serialize};
 
 use crate::errors::{MailingListError, Result};
 
@@ -22,7 +23,7 @@ static FULL: LazyLock<MessageParser> =
     LazyLock::new(|| MessageParser::new().header(MAIL_FROM, HeaderForm::Text));
 
 /// Headers of an archived mail, the body stays in the mirror
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Mail {
     pub message_id: String,
     pub subject: String,
@@ -32,9 +33,6 @@ pub struct Mail {
     pub url: String,
     pub(crate) epoch: u32,
     pub(crate) blob: ObjectId,
-    pub(crate) commit: ObjectId,
-    /// Archive order, set by the mirror
-    pub(crate) seq: u64,
     /// Ids this mail replies to, closest first
     pub(crate) parents: Vec<String>,
 }
@@ -45,7 +43,6 @@ pub(crate) fn index(
     list_url: &str,
     epoch: u32,
     blob: ObjectId,
-    commit: ObjectId,
     commit_time: i64,
 ) -> Option<Mail> {
     let message = HEADERS.parse_headers(raw)?;
@@ -74,8 +71,6 @@ pub(crate) fn index(
         url: format!("{list_url}{}/", escape_message_id(message_id)),
         epoch,
         blob,
-        commit,
-        seq: 0,
         parents,
     })
 }
@@ -130,7 +125,7 @@ mod tests {
 
     fn index_raw(raw: &[u8], commit_time: i64) -> Option<Mail> {
         let null = ObjectId::null(gix::hash::Kind::Sha1);
-        index(raw, "https://l/list/", 0, null, null, commit_time)
+        index(raw, "https://l/list/", 0, null, commit_time)
     }
 
     #[test]

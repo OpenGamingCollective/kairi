@@ -9,7 +9,7 @@ use flate2::read::GzDecoder;
 use reqwest::Client;
 use serde::Deserialize;
 
-use crate::errors::{MailingListError, Result};
+use crate::errors::Result;
 
 #[derive(Deserialize)]
 struct Entry {
@@ -42,8 +42,11 @@ fn parse(json: &[u8]) -> Result<(String, Vec<u32>)> {
         })
         .collect();
 
-    let (_, description) = epochs.last_key_value().ok_or(MailingListError::NoEpochs)?;
-    let description = description.as_deref().unwrap_or_default();
+    // A list nobody posted to yet has no epoch, so no description either
+    let description = epochs
+        .last_key_value()
+        .and_then(|(_, description)| description.as_deref())
+        .unwrap_or_default();
     let description = description
         .rsplit_once(" [epoch ")
         .map_or(description, |(description, _)| description)
@@ -55,6 +58,7 @@ fn parse(json: &[u8]) -> Result<(String, Vec<u32>)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::errors::MailingListError;
 
     #[test]
     fn manifest_lists_the_epochs() {
@@ -64,7 +68,7 @@ mod tests {
         );
 
         assert_eq!(manifest.unwrap(), ("A list".to_string(), vec![0, 1]));
-        assert!(matches!(parse(b"{}"), Err(MailingListError::NoEpochs)));
+        assert_eq!(parse(b"{}").unwrap(), (String::new(), vec![]));
         assert!(matches!(parse(b"<html>"), Err(MailingListError::Json(_))));
     }
 }

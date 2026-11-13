@@ -22,7 +22,7 @@
         };
       };
 
-      command = "${cfg.package}/bin/kairi --config ${cfg.tomlFile}";
+      command = "${cfg.package}/bin/kairi --config ${cfg.tomlFile} --data-dir ${cfg.dataDir}";
       testCommand = "${command} --test";
 
     in

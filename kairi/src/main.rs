@@ -65,7 +65,10 @@ async fn main() -> Result<()> {
 
     let config = kairi_config::Config::build(&file_content)?;
 
-    let _kairi_supervisor = Kairi::spawn(KairiArg { config });
+    let _kairi_supervisor = Kairi::spawn(KairiArg {
+        config,
+        data_dir: arg.data_dir,
+    });
     info!("Kairi started successfully");
     pending::<()>().await;
 

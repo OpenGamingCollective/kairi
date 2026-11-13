@@ -1,22 +1,21 @@
-use std::time::Duration;
+//! Keeps the local mirror of each mailing list in sync
+
+use std::{path::PathBuf, time::Duration};
 
 use kameo::prelude::*;
-use tokio::{
-    task::{self, JoinHandle},
-    time::sleep,
-};
-use tracing::{Instrument, info};
+use public_inbox::Mirror;
+use tokio::{task::AbortHandle, time::MissedTickBehavior};
+use tracing::{Instrument, error};
 
-use crate::types::MailingListEnum;
+use crate::types::{LISTS_URL, MailingListEnum};
 
-#[derive(Default)]
-pub struct PublicInboxMirror {
-    pub handles: Vec<JoinHandle<()>>,
-}
+pub struct PublicInboxMirror;
 
 #[derive(Debug, Clone)]
 pub struct PublicInboxMirrorArgs {
     pub repositories: Vec<MailingListEnum>,
+    /// Each list is mirrored in `<dir>/<list>`
+    pub dir: PathBuf,
 }
 
 impl Actor for PublicInboxMirror {
@@ -27,48 +26,81 @@ impl Actor for PublicInboxMirror {
         "public-inbox-mirror-pool"
     }
 
-    async fn on_start(
-        args: Self::Args,
-        actor_ref: kameo::prelude::ActorRef<Self>,
-    ) -> Result<Self, Self::Error> {
-        let actor = Self::default();
+    async fn on_start(args: Self::Args, actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
         for repository in args.repositories {
-            PublicInboxMirrorWorker::supervise(&actor_ref, repository)
+            let args = PublicInboxMirrorWorkerArgs {
+                list: repository,
+                dir: args.dir.join(repository.to_string()),
+            };
+            PublicInboxMirrorWorker::supervise(&actor_ref, args)
                 .spawn()
                 .await;
         }
-        Ok(actor)
+        Ok(Self)
     }
 }
 
-struct PublicInboxMirrorWorker {
+#[derive(Debug, Clone)]
+struct PublicInboxMirrorWorkerArgs {
     list: MailingListEnum,
-    handle: JoinHandle<()>,
+    dir: PathBuf,
+}
+
+struct PublicInboxMirrorWorker {
+    /// Aborted with the actor, restarted workers never leave their sync behind
+    sync: AbortHandle,
+}
+
+impl Drop for PublicInboxMirrorWorker {
+    fn drop(&mut self) {
+        self.sync.abort();
+    }
 }
 
 impl Actor for PublicInboxMirrorWorker {
-    type Args = MailingListEnum;
+    type Args = PublicInboxMirrorWorkerArgs;
     type Error = anyhow::Error;
 
     fn name() -> &'static str {
         "public-inbox-mirror-worker"
     }
+
     async fn on_start(args: Self::Args, actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
-        let span = tracing::info_span!("public-inbox-mirror-worker", list = %args);
+        let PublicInboxMirrorWorkerArgs { list, dir } = args;
+        let url = format!("{LISTS_URL}/{list}");
 
-        let sync_task = task::spawn(
-            async move {
-                loop {
-                    info!("do sync");
-                    sleep(Duration::from_secs(2)).await
-                }
+        let inbox = Mirror::open(&url, dir, crate::USER_AGENT)?;
+
+        let sync = tokio::spawn(mirror(list, inbox));
+        let abort = sync.abort_handle();
+
+        let worker = actor_ref.downgrade();
+        tokio::spawn(async move {
+            if let Err(error) = sync.await
+                && error.is_panic()
+            {
+                error!(%list, "mirroring panicked, restarting the worker");
+                worker.kill();
             }
-            .instrument(span),
-        );
-
-        Ok(Self {
-            list: args,
-            handle: sync_task,
-        })
+        });
+        Ok(Self { sync: abort })
     }
+}
+
+/// Fetch the list's mirror every minute, the first fetch clones it if it's absent
+async fn mirror(list: MailingListEnum, mut inbox: Mirror) {
+    let span = tracing::info_span!("public-inbox-mirror-worker", %list);
+    async move {
+        let mut ticks = tokio::time::interval(Duration::from_secs(60));
+        ticks.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+        loop {
+            ticks.tick().await;
+            if let Err(error) = inbox.fetch().await {
+                error!(%error, "mirroring failed, retrying next minute");
+            }
+        }
+    }
+    .instrument(span)
+    .await;
 }

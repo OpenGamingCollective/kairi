@@ -23,3 +23,4 @@ typesafe-api.workspace = true
 kameo_actors.workspace = true
 
 kairi-config = { path = "../kairi-config" }
+public-inbox = { path = "../public-inbox" }
