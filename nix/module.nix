@@ -22,7 +22,7 @@
         };
       };
 
-      command = "${cfg.package}/bin/kairi --config ${cfg.tomlFile}";
+      command = "${cfg.package}/bin/kairi --config ${cfg.tomlFile} --data-dir ${cfg.dataDir}";
       testCommand = "${command} --test";
 
     in
@@ -144,11 +144,13 @@
           description = "Kairi service";
 
           wantedBy = [ "multi-user.target" ];
-          after = [ "network.target" ];
+          wants = [ "network-online.target" ];
+          after = [ "network-online.target" ];
 
           serviceConfig = {
             ExecStart = command;
             ExecStartPre = testCommand;
+            Restart = "on-failure";
             RestartSec = 5;
             User = cfg.user;
             Group = cfg.group;

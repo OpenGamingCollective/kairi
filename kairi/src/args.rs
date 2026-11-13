@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use clap::Parser;
 
 #[derive(Parser, Debug)]
@@ -11,4 +13,8 @@ pub struct Args {
 
     #[arg(short, long)]
     pub debug: bool,
+
+    /// State directory, the mailing lists are mirrored under `<DATA_DIR>/public-inbox`
+    #[arg(long, default_value = "/var/lib/kairi")]
+    pub data_dir: PathBuf,
 }

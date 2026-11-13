@@ -17,6 +17,13 @@ mod args;
 mod platforms;
 mod types;
 
+/// kairi/0.1.0
+pub(crate) const USER_AGENT: &str = concat!(
+    "kairi/",
+    env!("CARGO_PKG_VERSION"),
+    " (+https://github.com/OpenGamingCollective/kairi)"
+);
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let arg = Args::parse();
@@ -49,7 +56,7 @@ async fn main() -> Result<()> {
     if arg.test {
         return match kairi_config::Config::build(&file_content) {
             Ok(_) => {
-                println!("config parsed correctly");
+                info!("config parsed correctly");
                 Ok(())
             }
             Err(err) => Err(anyhow!(err)),
@@ -58,7 +65,10 @@ async fn main() -> Result<()> {
 
     let config = kairi_config::Config::build(&file_content)?;
 
-    let _kairi_supervisor = Kairi::spawn(KairiArg { config });
+    let _kairi_supervisor = Kairi::spawn(KairiArg {
+        config,
+        data_dir: arg.data_dir,
+    });
     info!("Kairi started successfully");
     pending::<()>().await;
 

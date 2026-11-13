@@ -1,6 +1,9 @@
 use std::fmt::Display;
 
-#[derive(Debug, poise::ChoiceParameter, PartialEq, Hash, Eq, Clone, Copy)]
+/// OGC's public-inbox instance, the upstream the actor mirrors
+pub const LISTS_URL: &str = "https://lists.opengamingcollective.org";
+
+#[derive(Debug, poise::ChoiceParameter, PartialEq, Hash, Eq, Clone, Copy, strum::VariantArray)]
 pub enum MailingListEnum {
     #[name = "announcements"]
     Announcements,
@@ -23,7 +26,7 @@ impl Display for MailingListEnum {
             Self::Governance => write!(f, "governance"),
             Self::Conventions => write!(f, "conventions"),
             Self::Kernel => write!(f, "kernel"),
-            Self::KernelUnstable => writeln!(f, "kernel-unstable"),
+            Self::KernelUnstable => write!(f, "kernel-unstable"),
             Self::Asusctl => write!(f, "asusctl"),
         }
     }
