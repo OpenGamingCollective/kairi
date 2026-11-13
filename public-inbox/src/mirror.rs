@@ -1,6 +1,6 @@
 //! Local copy of a mailing list, kept in sync with upstream and indexed
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use reqwest::Client;
 use tracing::{Span, debug, info, instrument};
@@ -22,7 +22,7 @@ impl Mirror {
     /// Mirror the list at `url` into `dir`, nothing is fetched until `fetch`
     pub fn open(url: &str, dir: impl Into<PathBuf>, client_name: &str) -> Result<Self> {
         Ok(Self {
-            url: format!("{}/", url.trim_end_matches('/')),
+            url: list_url(url),
             dir: dir.into(),
             client: Client::builder().user_agent(client_name).build()?,
             epochs: Vec::new(),
@@ -72,11 +72,18 @@ impl Mirror {
         self.verified = true;
         Ok(())
     }
+}
 
-    /// Rebuild the index from the git already on disk if it changed or is broken, `true` if it did
-    ///
-    /// Blocking and reads the whole index, `fetch` already does it after each fetch
-    pub fn reindex(&self, description: &str) -> Result<bool> {
-        index::reindex(&self.dir, &self.url, description, true)
-    }
+/// Rebuild the index of the list at `url` from the git already in `dir` if it changed or is
+/// broken, `true` if it did
+///
+/// Blocking, no network nor HTTP client, reads the whole index. `Mirror::fetch` already does it
+/// after each fetch
+pub fn reindex(url: &str, dir: impl AsRef<Path>, description: &str) -> Result<bool> {
+    index::reindex(dir.as_ref(), &list_url(url), description, true)
+}
+
+/// Mail URLs are appended to it
+fn list_url(url: &str) -> String {
+    format!("{}/", url.trim_end_matches('/'))
 }

@@ -5,16 +5,14 @@ mod common;
 use std::{fs, path::Path};
 
 use common::Epoch;
-use public_inbox::{List, MailingListError, Mirror, Reader};
+use public_inbox::{List, MailingListError, Reader};
 
+const URL: &str = "https://l/list/";
 const DESCRIPTION: &str = "A list";
 
 /// Index the git in `dir` like the mirror does after a fetch
 fn reindex(dir: &Path) -> bool {
-    Mirror::open("https://l/list/", dir, "test")
-        .unwrap()
-        .reindex(DESCRIPTION)
-        .unwrap()
+    public_inbox::reindex(URL, dir, DESCRIPTION).unwrap()
 }
 
 fn list(dir: &Path) -> List {
@@ -156,9 +154,8 @@ fn a_broken_index_is_rebuilt() {
 #[test]
 fn a_new_description_is_reindexed() {
     let dir = tempfile::tempdir().unwrap();
-    let mirror = Mirror::open("https://l/list/", dir.path(), "test").unwrap();
-    assert!(mirror.reindex("old").unwrap());
-    assert!(mirror.reindex("new").unwrap());
+    assert!(public_inbox::reindex(URL, dir.path(), "old").unwrap());
+    assert!(public_inbox::reindex(URL, dir.path(), "new").unwrap());
     assert_eq!(list(dir.path()).description, "new");
 }
 
