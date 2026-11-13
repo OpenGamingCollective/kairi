@@ -63,7 +63,11 @@ pub(crate) fn reindex(dir: &Path, url: &str, description: &str, verify: bool) ->
         Ok(Some(indexed)) if indexed.list.description != description => "the description changed",
         Ok(Some(indexed)) if verify && !threads_intact(dir, &indexed.list) => "broken",
         Ok(Some(indexed)) => {
-            debug!(verified = verify, threads = indexed.list.threads.len(), "index up to date");
+            debug!(
+                verified = verify,
+                threads = indexed.list.threads.len(),
+                "index up to date"
+            );
             return Ok(false);
         }
     };
@@ -81,17 +85,19 @@ pub(crate) fn reindex(dir: &Path, url: &str, description: &str, verify: bool) ->
 
 /// Whether every listed thread has a file that parses, the first broken one is logged
 fn threads_intact(dir: &Path, list: &List) -> bool {
-    list.threads.iter().all(|summary| match read_thread(dir, &summary.uid) {
-        Ok(Some(_)) => true,
-        Ok(None) => {
-            warn!(uid = summary.uid, "an indexed thread's file is missing");
-            false
-        }
-        Err(error) => {
-            warn!(uid = summary.uid, %error, "an indexed thread's file is broken");
-            false
-        }
-    })
+    list.threads
+        .iter()
+        .all(|summary| match read_thread(dir, &summary.uid) {
+            Ok(Some(_)) => true,
+            Ok(None) => {
+                warn!(uid = summary.uid, "an indexed thread's file is missing");
+                false
+            }
+            Err(error) => {
+                warn!(uid = summary.uid, %error, "an indexed thread's file is broken");
+                false
+            }
+        })
 }
 
 /// Thread every mail of the epochs, the git is walked from scratch

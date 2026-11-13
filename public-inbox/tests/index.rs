@@ -22,7 +22,10 @@ fn list(dir: &Path) -> List {
 }
 
 fn names(list: &List) -> Vec<&str> {
-    list.threads.iter().map(|thread| thread.name.as_str()).collect()
+    list.threads
+        .iter()
+        .map(|thread| thread.name.as_str())
+        .collect()
 }
 
 fn index_target(dir: &Path) -> std::path::PathBuf {
@@ -53,7 +56,12 @@ fn nothing_is_read_before_the_first_index() {
     let list = list(dir.path());
     assert!(list.threads.is_empty());
     assert_eq!(list.description, "");
-    assert!(Reader::open(dir.path()).fetch_thread("abc").unwrap().is_none());
+    assert!(
+        Reader::open(dir.path())
+            .fetch_thread("abc")
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
@@ -127,7 +135,12 @@ fn a_broken_index_is_rebuilt() {
     fs::write(&thread, "").unwrap();
     assert!(Reader::open(dir.path()).fetch_thread(&uid).is_err());
     assert!(reindex(dir.path()));
-    assert!(Reader::open(dir.path()).fetch_thread(&uid).unwrap().is_some());
+    assert!(
+        Reader::open(dir.path())
+            .fetch_thread(&uid)
+            .unwrap()
+            .is_some()
+    );
 
     // Or `list.json` itself
     fs::write(dir.path().join("index/list.json"), "").unwrap();
@@ -172,7 +185,12 @@ fn rewritten_history_drops_purged_threads() {
     assert!(reindex(dir.path()));
 
     assert_eq!(names(&list(dir.path())), ["a", "c"]);
-    assert!(Reader::open(dir.path()).fetch_thread(&purged).unwrap().is_none());
+    assert!(
+        Reader::open(dir.path())
+            .fetch_thread(&purged)
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
