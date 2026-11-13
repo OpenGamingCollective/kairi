@@ -20,6 +20,6 @@ strum.workspace = true
 kameo.workspace = true
 poise.workspace = true
 typesafe-api.workspace = true
-
+kameo_actors.workspace = true
 
 kairi-config = { path = "../kairi-config" }

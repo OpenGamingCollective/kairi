@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-#[derive(Debug, poise::ChoiceParameter, PartialEq, Hash, Eq, Clone, Copy)]
+#[derive(Debug, poise::ChoiceParameter, PartialEq, Hash, Eq, Clone, Copy, strum::VariantArray)]
 pub enum MailingListEnum {
     #[name = "announcements"]
     Announcements,

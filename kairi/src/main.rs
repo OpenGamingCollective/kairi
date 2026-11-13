@@ -17,6 +17,13 @@ mod args;
 mod platforms;
 mod types;
 
+/// kairi/0.1.0
+pub(crate) const USER_AGENT: &str = concat!(
+    "kairi/",
+    env!("CARGO_PKG_VERSION"),
+    " (+https://github.com/OpenGamingCollective/kairi)"
+);
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let arg = Args::parse();

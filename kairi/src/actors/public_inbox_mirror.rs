@@ -1,5 +1,11 @@
-use kameo::Actor;
-use tokio::task::JoinHandle;
+use std::time::Duration;
+
+use kameo::prelude::*;
+use tokio::{
+    task::{self, JoinHandle},
+    time::sleep,
+};
+use tracing::{Instrument, info};
 
 use crate::types::MailingListEnum;
 
@@ -18,23 +24,51 @@ impl Actor for PublicInboxMirror {
     type Error = anyhow::Error;
 
     fn name() -> &'static str {
-        "public-inbox-mirror"
+        "public-inbox-mirror-pool"
     }
 
     async fn on_start(
         args: Self::Args,
         actor_ref: kameo::prelude::ActorRef<Self>,
     ) -> Result<Self, Self::Error> {
-        let mut actor = Self::default();
-        // Spawn one task for each list to mirror
-        let mut handles: Vec<JoinHandle<()>> = Vec::new();
-
+        let actor = Self::default();
         for repository in args.repositories {
-            handles.push(tokio::spawn(async move {
-                // Mirror task for said repo
-            }));
+            PublicInboxMirrorWorker::supervise(&actor_ref, repository)
+                .spawn()
+                .await;
         }
-        actor.handles = handles;
         Ok(actor)
+    }
+}
+
+struct PublicInboxMirrorWorker {
+    list: MailingListEnum,
+    handle: JoinHandle<()>,
+}
+
+impl Actor for PublicInboxMirrorWorker {
+    type Args = MailingListEnum;
+    type Error = anyhow::Error;
+
+    fn name() -> &'static str {
+        "public-inbox-mirror-worker"
+    }
+    async fn on_start(args: Self::Args, actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
+        let span = tracing::info_span!("public-inbox-mirror-worker", list = %args);
+
+        let sync_task = task::spawn(
+            async move {
+                loop {
+                    info!("do sync");
+                    sleep(Duration::from_secs(2)).await
+                }
+            }
+            .instrument(span),
+        );
+
+        Ok(Self {
+            list: args,
+            handle: sync_task,
+        })
     }
 }

@@ -8,6 +8,7 @@ use std::{
     sync::{Arc, OnceLock},
     time::Duration,
 };
+use strum::VariantArray;
 
 use crate::{
     actors::{
@@ -57,10 +58,10 @@ impl Actor for Kairi {
         .spawn()
         .await;
 
-        let public_inbox_mirror = PublicInboxMirror::supervise(
+        let _public_inbox_mirror = PublicInboxMirror::supervise(
             &actor_ref,
             PublicInboxMirrorArgs {
-                repositories: [MailingListEnum::Governance].to_vec(),
+                repositories: MailingListEnum::VARIANTS.to_vec(),
             },
         )
         .restart_policy(RestartPolicy::Permanent)
