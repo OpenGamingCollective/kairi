@@ -2236,7 +2236,6 @@ dependencies = [
  "kairi-config",
  "kameo",
  "poise",
- "public-inbox",
  "serde",
  "strum",
  "tokio",

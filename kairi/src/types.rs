@@ -1,13 +1,4 @@
-use std::{
-    collections::HashMap,
-    fmt::Display,
-    sync::{Arc, RwLock},
-};
-
-use public_inbox::MailingList;
-
-/// The mirrored mailing lists, opened by `PublicInboxMirror`
-pub type MailingLists = Arc<RwLock<HashMap<MailingListEnum, Arc<MailingList>>>>;
+use std::fmt::Display;
 
 #[derive(Debug, poise::ChoiceParameter, PartialEq, Hash, Eq, Clone, Copy)]
 pub enum MailingListEnum {

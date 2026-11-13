@@ -23,4 +23,3 @@ typesafe-api.workspace = true
 
 
 kairi-config = { path = "../kairi-config" }
-public-inbox = { path = "../public-inbox" }
