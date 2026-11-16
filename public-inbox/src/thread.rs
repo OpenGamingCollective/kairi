@@ -16,14 +16,18 @@ pub struct Thread {
 
 impl Thread {
     fn new(first_message_id: &str) -> Self {
-        let uid = Sha256::digest(first_message_id)[..6]
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
         Self {
-            uid,
+            uid: Self::uid_of(first_message_id),
             mails: Vec::new(),
         }
+    }
+
+    /// Uid of the thread started by a mail
+    pub(crate) fn uid_of(first_message_id: &str) -> String {
+        Sha256::digest(first_message_id)[..6]
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
     }
 
     /// Hash of the first archived mail's Message-ID, stable unless that mail is

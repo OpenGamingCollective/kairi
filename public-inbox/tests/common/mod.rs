@@ -37,6 +37,10 @@ impl Epoch {
     /// Commit a mail as the only file of the tree, on top of `parent`
     fn commit(&self, parent: Option<ObjectId>, file: &str, id: &str) -> ObjectId {
         let raw = format!("Subject: {id}\r\nMessage-ID: <{id}>\r\n\r\nbody of {id}");
+        self.commit_raw(parent, file, raw)
+    }
+
+    fn commit_raw(&self, parent: Option<ObjectId>, file: &str, raw: String) -> ObjectId {
         let tree = Tree {
             entries: vec![tree::Entry {
                 mode: tree::EntryKind::Blob.into(),
@@ -66,6 +70,14 @@ impl Epoch {
         for id in ids {
             self.commit(self.head(), "m", id);
         }
+    }
+
+    /// Archive `id` as a reply to `parent`
+    pub fn reply(&self, id: &str, parent: &str) {
+        let raw = format!(
+            "Subject: Re: {parent}\r\nMessage-ID: <{id}>\r\nIn-Reply-To: <{parent}>\r\n\r\nbody of {id}"
+        );
+        self.commit_raw(self.head(), "m", raw);
     }
 
     pub fn delete(&self, id: &str) {
