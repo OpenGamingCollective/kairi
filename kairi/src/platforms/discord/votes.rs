@@ -1,12 +1,14 @@
-//! `/votes`, the count of a vote held on a mailing list
+//! `/votes`, the count of a vote held on a mailing list: a summary anyone can read at a
+//! glance, and a button for who voted what
 
 use std::fmt::Write;
 
 use kameo::error::SendError;
 use poise::serenity_prelude as serenity;
-use voting::{Ballot, Outcome, Reason, Round, Tally, Vote};
+use strum::VariantArray;
+use voting::{Ballot, Outcome, Reason, Round, Standing, Tally, Vote};
 
-use super::{SerenityContext, SerenityError};
+use super::{Data, SerenityContext, SerenityError};
 use crate::{
     actors::{Count, CountVotes, FetchList},
     types::MailingListEnum,
@@ -17,15 +19,21 @@ const TITLE: usize = 256;
 const FIELD: usize = 1024;
 const FIELDS: usize = 25;
 const EMBED: usize = 6000;
-
-/// Discord trims the spaces a line starts with, not this one
-const INDENT: &str = "\u{2003}";
 const CHOICE: usize = 100;
 const CHOICES: usize = 25;
 
 const GREEN: u32 = 0x2e_cc_71;
 const ORANGE: u32 = 0xe6_7e_22;
 const RED: u32 = 0xe7_4c_3c;
+
+/// Starts the id of the details button, the list and the uid of the thread follow
+const DETAILS: &str = "votes";
+
+/// Cells of a result bar
+const BAR: usize = 12;
+
+/// A field of an embed: its name, its lines and whether it sits next to the others
+type Field = (String, Vec<String>, bool);
 
 /// Count the votes of a mailing list thread
 #[poise::command(slash_command)]
@@ -46,8 +54,13 @@ pub async fn votes(
     };
     match ctx.data().voting.ask(count).await {
         Ok(count) => {
-            ctx.send(poise::CreateReply::default().embed(embed(&count)))
-                .await?;
+            let details = serenity::CreateButton::new(details_id(&count))
+                .label("Details")
+                .style(serenity::ButtonStyle::Secondary);
+            let reply = poise::CreateReply::default()
+                .embed(summary(&count))
+                .components(vec![serenity::CreateActionRow::Buttons(vec![details])]);
+            ctx.send(reply).await?;
         }
         Err(SendError::HandlerError(error)) => {
             ctx.say(format!("Can't count the votes: {error}")).await?;
@@ -58,6 +71,58 @@ pub async fn votes(
         }
     }
     Ok(())
+}
+
+/// Answer the details button, only to who pressed it
+///
+/// The id of the button says which thread, it still works after a restart
+pub async fn on_event(
+    ctx: &serenity::Context,
+    event: &serenity::FullEvent,
+    data: &Data,
+) -> Result<(), SerenityError> {
+    let serenity::FullEvent::InteractionCreate { interaction } = event else {
+        return Ok(());
+    };
+    let Some(component) = interaction.as_message_component() else {
+        return Ok(());
+    };
+    let Some((list, uid)) = parse_details_id(&component.data.custom_id) else {
+        return Ok(());
+    };
+
+    component.defer_ephemeral(&ctx.http).await?;
+    let count = CountVotes {
+        list,
+        thread: uid,
+        requested_by: format!("discord /votes details @{}", component.user.name),
+    };
+    let followup = serenity::CreateInteractionResponseFollowup::new().ephemeral(true);
+    let followup = match data.voting.ask(count).await {
+        Ok(count) => followup.embed(details(&count)),
+        Err(SendError::HandlerError(error)) => {
+            followup.content(format!("Can't count the votes: {error}"))
+        }
+        Err(error) => followup.content(format!("Can't count the votes right now: {error}")),
+    };
+    component.create_followup(&ctx.http, followup).await?;
+    Ok(())
+}
+
+fn details_id(count: &Count) -> String {
+    format!("{DETAILS}:{}:{}", count.list, count.uid)
+}
+
+fn parse_details_id(id: &str) -> Option<(MailingListEnum, String)> {
+    let mut parts = id.split(':');
+    if parts.next()? != DETAILS {
+        return None;
+    }
+    let list = parts.next()?;
+    let list = MailingListEnum::VARIANTS
+        .iter()
+        .find(|variant| variant.to_string() == list)?;
+    Some((*list, parts.next()?.to_string()))
 }
 
 /// The governance threads, the newest first
@@ -83,16 +148,27 @@ async fn threads(ctx: SerenityContext<'_>, partial: &str) -> serenity::CreateAut
     serenity::CreateAutocompleteResponse::new().set_choices(choices)
 }
 
-fn embed(count: &Count) -> serenity::CreateEmbed {
-    let tally = &count.tally;
-    let colour = match tally.outcome {
+fn colour(tally: &Tally) -> u32 {
+    match tally.outcome {
         _ if tally.open => ORANGE,
         Outcome::Passed(_) => GREEN,
         Outcome::Tied | Outcome::Void | Outcome::NoVotes => RED,
-    };
+    }
+}
 
+/// The outcome and the score of each option
+fn summary(count: &Count) -> serenity::CreateEmbed {
+    serenity::CreateEmbed::new()
+        .title(truncate(&count.name, TITLE))
+        .url(&count.url)
+        .description(overview(&count.tally))
+        .colour(colour(&count.tally))
+}
+
+/// Who voted what in each organisation, and what wasn't counted
+fn details(count: &Count) -> serenity::CreateEmbed {
+    let tally = &count.tally;
     let title = truncate(&count.name, TITLE);
-    let description = headline(tally);
     let footer = format!(
         "{} members, {} of them can vote",
         tally.members, tally.eligible
@@ -100,14 +176,14 @@ fn embed(count: &Count) -> serenity::CreateEmbed {
 
     // A field too long goes on in the next one, as long as the embed has room
     let size = |text: &str| text.chars().count();
-    let mut room = EMBED.saturating_sub(size(&title) + size(&description) + size(&footer));
+    let mut room = EMBED.saturating_sub(size(&title) + size(&footer));
     let fields: Vec<(String, String, bool)> = fields(tally)
         .into_iter()
-        .flat_map(|(name, lines)| {
+        .flat_map(|(name, lines, inline)| {
             let texts = chunks(&lines, FIELD).into_iter().enumerate();
             texts.map(move |(position, text)| match position {
-                0 => (name.clone(), text, false),
-                _ => (format!("{name}, continued"), text, false),
+                0 => (name.clone(), text, inline),
+                _ => (format!("{name}, continued"), text, inline),
             })
         })
         .take(FIELDS)
@@ -123,10 +199,42 @@ fn embed(count: &Count) -> serenity::CreateEmbed {
     serenity::CreateEmbed::new()
         .title(title)
         .url(&count.url)
-        .description(description)
         .fields(fields)
         .footer(serenity::CreateEmbedFooter::new(footer))
-        .colour(colour)
+        .colour(colour(tally))
+}
+
+/// Everything the summary says
+fn overview(tally: &Tally) -> String {
+    let mut text = headline(tally);
+
+    if let Some(round) = tally.rounds.last() {
+        let _ = write!(text, "\n```\n{}\n```", bars(round).join("\n"));
+        if tally.rounds.len() > 1 {
+            let rounds = tally.rounds.len();
+            let _ = writeln!(text, "After {rounds} rounds of instant runoff");
+        }
+        if tally.abstained > 0.0 {
+            let abstained = percent(tally.abstained);
+            let _ = writeln!(text, "{abstained} of the vote abstained");
+        }
+    } else {
+        text.push('\n');
+    }
+
+    let _ = write!(
+        text,
+        "**{}** ballots, **{}** of **{}** organisations reached quorum",
+        tally.ballots.len(),
+        tally.counting(),
+        tally.standings.len()
+    );
+    if !tally.rejected.is_empty() {
+        let rejected = tally.rejected.len();
+        let replies = if rejected == 1 { "reply" } else { "replies" };
+        let _ = write!(text, "\n**{rejected}** {replies} not counted");
+    }
+    text
 }
 
 fn headline(tally: &Tally) -> String {
@@ -137,12 +245,12 @@ fn headline(tally: &Tally) -> String {
                 .option(number)
                 .map_or("", |option| option.title.as_str());
             let verb = if tally.open { "is ahead" } else { "passed" };
-            format!("**Option {number} {verb}**: {title}")
+            format!("**Option {number} {verb}**\n{title}")
         }
         Outcome::Tied if tally.open => "**Tied** so far".to_string(),
         Outcome::Tied => "**Tied**, the vote has to be held again".to_string(),
         Outcome::Void if tally.open => "**No quorum** yet".to_string(),
-        Outcome::Void => "**Void**, the coalition quorum was not met".to_string(),
+        Outcome::Void => "**Void**, not enough organisations reached quorum".to_string(),
         Outcome::NoVotes => "**No votes** for any option".to_string(),
     };
 
@@ -155,16 +263,31 @@ fn headline(tally: &Tally) -> String {
     format!("{outcome}\n{window}")
 }
 
-/// Name and lines of each field
-fn fields(tally: &Tally) -> Vec<(String, Vec<String>)> {
-    let mut fields = Vec::new();
+/// A bar for each option of a round, aligned for a code block
+fn bars(round: &Round) -> Vec<String> {
+    let total = round.total();
+    round
+        .scores
+        .iter()
+        .map(|(number, score)| {
+            let share = if total > 0.0 { score / total } else { 0.0 };
+            let filled = ((share * BAR as f64).round() as usize).min(BAR);
+            let bar = "█".repeat(filled) + &"░".repeat(BAR - filled);
+            format!("Option {number}  {bar}  {:>6}", percent(share))
+        })
+        .collect()
+}
 
-    if !tally.rounds.is_empty() {
-        fields.push(("Result".to_string(), result(tally)));
+/// The fields of the details
+fn fields(tally: &Tally) -> Vec<Field> {
+    let mut fields: Vec<Field> = Vec::new();
+
+    if tally.rounds.len() > 1 {
+        fields.push(("Runoff".to_string(), rounds(tally), false));
     }
 
-    let name = format!("Ballots ({})", tally.ballots.len());
-    fields.push((name, ballots(tally)));
+    // One card per organisation
+    fields.extend(tally.standings.iter().map(|standing| card(tally, standing)));
 
     let notes: Vec<String> = tally
         .ballots
@@ -176,7 +299,7 @@ fn fields(tally: &Tally) -> Vec<(String, Vec<String>)> {
         })
         .collect();
     if !notes.is_empty() {
-        fields.push(("Notes".to_string(), notes));
+        fields.push(("Notes".to_string(), notes, false));
     }
 
     if !tally.rejected.is_empty() {
@@ -193,100 +316,82 @@ fn fields(tally: &Tally) -> Vec<(String, Vec<String>)> {
             };
             format!("[{}]({}) {reason}", rejected.author, rejected.url)
         });
-        fields.push((name, rejected.collect()));
+        fields.push((name, rejected.collect(), false));
     }
     fields
 }
 
-fn result(tally: &Tally) -> Vec<String> {
-    let scores = |round: &Round| -> Vec<String> {
-        let total = round.total();
-        round
-            .scores
-            .iter()
-            .map(|(number, score)| {
-                let share = if total > 0.0 { score / total } else { 0.0 };
-                format!("Option {number}: **{}**", percent(share))
-            })
-            .collect()
-    };
+/// An organisation: its turnout, its share of the vote and what its members voted
+fn card(tally: &Tally, standing: &Standing) -> Field {
+    let mark = if standing.counts { "✅" } else { "❌" };
+    let turnout = format!("{}/{} voted", standing.voted, standing.roster);
+    let mut lines = vec![if standing.counts {
+        format!("{turnout}, {} of the vote", percent(standing.weight))
+    } else if standing.voted > 0 {
+        format!("{turnout}, under quorum")
+    } else {
+        turnout
+    }];
 
-    let mut lines = match tally.rounds.as_slice() {
-        [round] => scores(round),
-        rounds => rounds
-            .iter()
-            .enumerate()
-            .map(|(position, round)| {
-                let mut line = format!("Round {}: {}", position + 1, scores(round).join(", "));
-                if !round.eliminated.is_empty() {
-                    let out: Vec<String> = round.eliminated.iter().map(u32::to_string).collect();
-                    let _ = write!(line, ", option {} out", out.join(" and "));
-                }
-                line
-            })
-            .collect(),
-    };
-    if tally.abstained > 0.0 {
-        lines.push(format!(
-            "{} of the vote abstained",
-            percent(tally.abstained)
-        ));
+    let cast: Vec<&Ballot> = tally
+        .ballots
+        .iter()
+        .filter(|ballot| standing.voters.contains(&ballot.member))
+        .collect();
+    // In the order of the motion, the abstentions last
+    let mut votes: Vec<&Vote> = Vec::new();
+    for ballot in &cast {
+        if !votes.contains(&&ballot.vote) {
+            votes.push(&ballot.vote);
+        }
     }
-    lines
+    votes.sort_by_key(|vote| match vote {
+        Vote::Ranked(options) => (0, options.clone()),
+        Vote::Abstain => (1, Vec::new()),
+    });
+
+    for vote in votes {
+        let label = match vote {
+            Vote::Abstain => "Abstained".to_string(),
+            Vote::Ranked(options) => {
+                let options: Vec<String> = options.iter().map(u32::to_string).collect();
+                format!("Option {}", options.join(" > "))
+            }
+        };
+        let members: Vec<&str> = cast
+            .iter()
+            .filter(|ballot| ballot.vote == *vote)
+            .map(|ballot| ballot.member.as_str())
+            .collect();
+        lines.push(format!("**{label}**: {}", members.join(", ")));
+    }
+    (format!("{mark} {}", standing.name), lines, true)
 }
 
-/// Each organisation with its turnout and its share of the vote, then what its members voted
-fn ballots(tally: &Tally) -> Vec<String> {
-    let label = |vote: &Vote| match vote {
-        Vote::Abstain => "Abstained".to_string(),
-        Vote::Ranked(options) => {
-            let options: Vec<String> = options.iter().map(u32::to_string).collect();
-            format!("Option {}", options.join(" > "))
-        }
-    };
-
-    let mut lines = vec![format!(
-        "{} of {} count, {} needed",
-        tally.counting(),
-        tally.standings.len(),
-        percent(tally.coalition_quorum)
-    )];
-    for standing in &tally.standings {
-        let turnout = format!("{}/{}", standing.voted, standing.roster);
-        lines.push(if standing.counts {
-            let weight = percent(standing.weight);
-            format!("✅ {}, {turnout}, {weight}", standing.name)
-        } else {
-            format!("❌ {}, {turnout}", standing.name)
-        });
-
-        let cast: Vec<&Ballot> = tally
-            .ballots
-            .iter()
-            .filter(|ballot| standing.voters.contains(&ballot.member))
-            .collect();
-        // In the order of the motion, the abstentions last
-        let mut votes: Vec<&Vote> = Vec::new();
-        for ballot in &cast {
-            if !votes.contains(&&ballot.vote) {
-                votes.push(&ballot.vote);
-            }
-        }
-        votes.sort_by_key(|vote| match vote {
-            Vote::Ranked(options) => (0, options.clone()),
-            Vote::Abstain => (1, Vec::new()),
-        });
-
-        for vote in votes {
-            let members: Vec<&str> = cast
+/// Each round of an instant runoff
+fn rounds(tally: &Tally) -> Vec<String> {
+    tally
+        .rounds
+        .iter()
+        .enumerate()
+        .map(|(position, round)| {
+            let total = round.total();
+            let scores: Vec<String> = round
+                .scores
                 .iter()
-                .filter(|ballot| ballot.vote == *vote)
-                .map(|ballot| ballot.member.as_str())
+                .map(|(number, score)| {
+                    let share = if total > 0.0 { score / total } else { 0.0 };
+                    format!("Option {number} **{}**", percent(share))
+                })
                 .collect();
-            lines.push(format!("{INDENT}{}: {}", label(vote), members.join(", ")));
-        }
-    }
-    lines
+            let mut line = format!("Round {}: {}", position + 1, scores.join(", "));
+            if !round.eliminated.is_empty() {
+                let out: Vec<String> = round.eliminated.iter().map(u32::to_string).collect();
+                let _ = write!(line, ", option {} out", out.join(" and "));
+            }
+            line
+        })
+        .collect()
 }
 
 fn percent(share: f64) -> String {
@@ -332,6 +437,7 @@ mod tests {
     use super::*;
 
     const MAIL: &str = "Option 1: Square roots\nOption 2: Equal shares\nVOTE BELOW THIS LINE\n";
+    const THREE: &str = "Option 1: a\nOption 2: b\nOption 3: c\n";
 
     fn sent() -> DateTime<Utc> {
         "2026-09-11T23:47:36Z".parse().unwrap()
@@ -345,10 +451,14 @@ mod tests {
                     "bob": { "email": "bob@example.org" },
                     "carol": { "email": "carol@example.org" },
                     "dave": { "email": "dave@example.org" },
-                    "erin": { "email": "" }
+                    "erin": { "email": "" },
+                    "frank": { "email": "frank@example.org" },
+                    "grace": { "email": "grace@example.org" },
+                    "heidi": { "email": "heidi@example.org" }
                 },
                 "groups": {
                     "fyra": { "description": "Fyra Labs", "org": true, "members": ["alice", "bob"] },
+                    "nobara": { "description": "Nobara", "org": true, "members": ["frank", "grace", "heidi"] },
                     "ublue": { "description": "Universal Blue", "org": true, "members": ["carol", "erin"] }
                 }
             }"#,
@@ -367,50 +477,99 @@ mod tests {
         }
     }
 
-    fn count(replies: &[Reply], hours: i64) -> Tally {
+    fn count_of(mail: &str, replies: &[Reply], hours: i64) -> Tally {
         let now = sent() + TimeDelta::hours(hours);
-        voting::tally(MAIL, sent(), replies, &roster(), &Policy::default(), now).unwrap()
+        voting::tally(mail, sent(), replies, &roster(), &Policy::default(), now).unwrap()
     }
 
-    fn field<'a>(fields: &'a [(String, Vec<String>)], name: &str) -> &'a [String] {
-        let (_, lines) = fields.iter().find(|field| field.0 == name).unwrap();
+    fn count(replies: &[Reply], hours: i64) -> Tally {
+        count_of(MAIL, replies, hours)
+    }
+
+    fn field<'a>(fields: &'a [Field], name: &str) -> &'a [String] {
+        let (_, lines, _) = fields.iter().find(|field| field.0 == name).unwrap();
         lines
     }
 
-    #[test]
-    fn a_closed_vote_shows_who_voted_what() {
-        let tally = count(
+    /// fyra votes together, nobara is under its quorum, a stranger votes too
+    fn closed() -> Tally {
+        count(
             &[
                 reply("alice", "Option 1"),
                 reply("bob", "Option 1"),
                 reply("dave", "Option 2"),
+                reply("frank", "Option 2"),
                 reply("mallory", "Option 2"),
             ],
             48,
-        );
+        )
+    }
 
-        assert_eq!(
-            headline(&tally),
-            "**Option 1 passed**: Square roots\nClosed <t:1789256856:R>"
-        );
-
-        let fields = fields(&tally);
+    #[test]
+    fn the_summary_is_the_outcome_and_the_scores() {
         // √2 for fyra, 1 for dave alone in the unaffiliated block
         assert_eq!(
-            field(&fields, "Result"),
-            ["Option 1: **58.6%**", "Option 2: **41.4%**"]
+            overview(&closed()),
+            "**Option 1 passed**\n\
+             Square roots\n\
+             Closed <t:1789256856:R>\n\
+             ```\n\
+             Option 1  ███████░░░░░   58.6%\n\
+             Option 2  █████░░░░░░░   41.4%\n\
+             ```\
+             **4** ballots, **2** of **4** organisations reached quorum\n\
+             **1** reply not counted"
         );
+    }
+
+    #[test]
+    fn an_open_vote_is_provisional() {
+        let tally = count(&[reply("alice", "Option 2"), reply("dave", "abstain")], 2);
+        let overview = overview(&tally);
+        assert!(overview.starts_with("**Option 2 is ahead**\nEqual shares\nOpen until <t:"));
+        assert!(overview.contains("Option 2  ████████████  100.0%\n"));
+        assert!(overview.contains("```41.4% of the vote abstained\n**2** ballots"));
+    }
+
+    #[test]
+    fn a_void_vote_has_no_scores() {
+        let tally = count(&[reply("carol", "Option 2")], 48);
         assert_eq!(
-            field(&fields, "Ballots (3)"),
+            overview(&tally),
+            "**Void**, not enough organisations reached quorum\n\
+             Closed <t:1789256856:R>\n\
+             **1** ballots, **1** of **4** organisations reached quorum"
+        );
+    }
+
+    #[test]
+    fn the_details_have_a_card_per_organisation() {
+        let fields = fields(&closed());
+        let names: Vec<&str> = fields.iter().map(|field| &*field.0).collect();
+        assert_eq!(
+            names,
             [
-                "2 of 3 count, 50.0% needed",
-                "✅ Fyra Labs, 2/2, 58.6%",
-                "\u{2003}Option 1: alice, bob",
-                "❌ Universal Blue, 0/2",
-                "✅ Unaffiliated, 1/1, 41.4%",
-                "\u{2003}Option 2: dave",
+                "✅ Fyra Labs",
+                "❌ Nobara",
+                "❌ Universal Blue",
+                "✅ Unaffiliated",
+                "Notes",
+                "Not counted (1)",
             ]
         );
+        // Cards sit side by side, the rest takes the whole width
+        let inline: Vec<bool> = fields.iter().map(|field| field.2).collect();
+        assert_eq!(inline, [true, true, true, true, false, false]);
+
+        assert_eq!(
+            field(&fields, "✅ Fyra Labs"),
+            ["2/2 voted, 58.6% of the vote", "**Option 1**: alice, bob"]
+        );
+        assert_eq!(
+            field(&fields, "❌ Nobara"),
+            ["1/3 voted, under quorum", "**Option 2**: frank"]
+        );
+        assert_eq!(field(&fields, "❌ Universal Blue"), ["0/2 voted"]);
         assert_eq!(
             field(&fields, "Notes"),
             ["bob replied to another reply, not to the first mail"]
@@ -422,40 +581,39 @@ mod tests {
     }
 
     #[test]
-    fn an_open_vote_is_provisional() {
-        let tally = count(&[reply("alice", "Option 2"), reply("dave", "abstain")], 2);
-        let headline = headline(&tally);
-        assert!(headline.starts_with("**Option 2 is ahead**: Equal shares\nOpen until <t:"));
+    fn a_runoff_shows_its_rounds() {
+        let tally = count_of(
+            THREE,
+            &[
+                reply("alice", "Option 1 > Option 2"),
+                reply("bob", "Option 3 > Option 2"),
+                reply("dave", "Option 2"),
+                reply("carol", "Abstain"),
+            ],
+            48,
+        );
+        assert!(overview(&tally).contains("```After 2 rounds of instant runoff\n"));
 
         let fields = fields(&tally);
+        let rounds = field(&fields, "Runoff");
+        assert_eq!(rounds.len(), 2);
+        assert!(rounds[0].starts_with("Round 1: Option 1 **"));
+        assert!(rounds[0].ends_with(", option 1 and 3 out"));
         assert_eq!(
-            field(&fields, "Result"),
-            [
-                "Option 1: **0.0%**",
-                "Option 2: **100.0%**",
-                "41.4% of the vote abstained",
-            ]
+            field(&fields, "✅ Fyra Labs")[1..],
+            ["**Option 1 > 2**: alice", "**Option 3 > 2**: bob"]
         );
     }
 
     #[test]
-    fn a_void_vote_has_no_result() {
-        let tally = count(&[reply("carol", "Option 2")], 48);
-        assert!(headline(&tally).starts_with("**Void**"));
-
-        let fields = fields(&tally);
-        assert!(fields.iter().all(|(name, _)| name != "Result"));
-        assert!(fields.iter().all(|(name, _)| name != "Notes"));
+    fn the_details_button_remembers_its_thread() {
         assert_eq!(
-            field(&fields, "Ballots (1)"),
-            [
-                "1 of 3 count, 50.0% needed",
-                "❌ Fyra Labs, 0/2",
-                "✅ Universal Blue, 1/2, 100.0%",
-                "\u{2003}Option 2: carol",
-                "❌ Unaffiliated, 0/1",
-            ]
+            parse_details_id("votes:governance:0a1b2c3d4e5f"),
+            Some((MailingListEnum::Governance, "0a1b2c3d4e5f".to_string()))
         );
+        assert_eq!(parse_details_id("votes:nope:0a1b2c3d4e5f"), None);
+        assert_eq!(parse_details_id("other:governance:0a1b"), None);
+        assert_eq!(parse_details_id("votes:governance"), None);
     }
 
     #[test]
