@@ -2271,6 +2271,7 @@ name = "kairi"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
  "kairi-config",
  "kameo",
@@ -2279,11 +2280,13 @@ dependencies = [
  "public-inbox",
  "serde",
  "strum",
+ "thiserror 2.0.21",
  "tokio",
  "toml",
  "tracing",
  "tracing-subscriber",
  "typesafe-api",
+ "voting",
 ]
 
 [[package]]
