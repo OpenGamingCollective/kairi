@@ -289,19 +289,6 @@ fn fields(tally: &Tally) -> Vec<Field> {
     // One card per organisation
     fields.extend(tally.standings.iter().map(|standing| card(tally, standing)));
 
-    let notes: Vec<String> = tally
-        .ballots
-        .iter()
-        .filter(|ballot| !ballot.to_first_mail)
-        .map(|ballot| {
-            let member = &ballot.member;
-            format!("{member} replied to another reply, not to the first mail")
-        })
-        .collect();
-    if !notes.is_empty() {
-        fields.push(("Notes".to_string(), notes, false));
-    }
-
     if !tally.rejected.is_empty() {
         let name = format!("Not counted ({})", tally.rejected.len());
         let rejected = tally.rejected.iter().map(|rejected| {
@@ -472,7 +459,6 @@ mod tests {
             sender: Some(format!("{author}@example.org")),
             date: sent() + TimeDelta::hours(1),
             url: format!("https://l/{author}/"),
-            to_first_mail: author != "bob",
             body: body.to_string(),
         }
     }
@@ -553,13 +539,12 @@ mod tests {
                 "❌ Nobara",
                 "❌ Universal Blue",
                 "✅ Unaffiliated",
-                "Notes",
                 "Not counted (1)",
             ]
         );
         // Cards sit side by side, the rest takes the whole width
         let inline: Vec<bool> = fields.iter().map(|field| field.2).collect();
-        assert_eq!(inline, [true, true, true, true, false, false]);
+        assert_eq!(inline, [true, true, true, true, false]);
 
         assert_eq!(
             field(&fields, "✅ Fyra Labs"),
@@ -570,10 +555,6 @@ mod tests {
             ["1/3 voted, under quorum", "**Option 2**: frank"]
         );
         assert_eq!(field(&fields, "❌ Universal Blue"), ["0/2 voted"]);
-        assert_eq!(
-            field(&fields, "Notes"),
-            ["bob replied to another reply, not to the first mail"]
-        );
         assert_eq!(
             field(&fields, "Not counted (1)"),
             ["[mallory](https://l/mallory/) voted from an address that isn't on the roster"]

@@ -119,20 +119,17 @@ impl Message<CountVotes> for Voting {
             })
             .await?;
 
-        let first = thread.root();
-        let mut mails = thread.mails().iter().zip(&messages).map(|(mail, message)| {
-            let to_first_mail = message
-                .in_reply_to()
-                .is_some_and(|ids| ids.iter().any(|id| id == first.message_id));
-            Reply {
+        let mut mails = thread
+            .mails()
+            .iter()
+            .zip(&messages)
+            .map(|(mail, message)| Reply {
                 author: mail.author.clone(),
                 sender: mail.sender.clone(),
                 date: mail.date,
                 url: mail.url.clone(),
-                to_first_mail,
                 body: message.body_text(0).unwrap_or_default().into_owned(),
-            }
-        });
+            });
         let motion = mails.next().ok_or(VotingError::NoSuchThread)?;
         let replies: Vec<Reply> = mails.collect();
 
