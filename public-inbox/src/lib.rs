@@ -3,7 +3,6 @@ mod epoch;
 mod errors;
 mod index;
 mod manifest;
-mod members;
 mod message;
 mod mirror;
 mod reader;
@@ -16,4 +15,3 @@ pub use mirror::{Mirror, reindex};
 pub use reader::{List, Reader};
 pub use thread::{Thread, ThreadSummary};
 
-pub use members::{Member, OrgList, parse_members_json};
