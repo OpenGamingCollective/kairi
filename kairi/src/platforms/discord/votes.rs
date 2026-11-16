@@ -208,32 +208,54 @@ fn overview(tally: &Tally) -> String {
     let mut text = headline(tally);
 
     if let Some(round) = tally.rounds.last() {
-        let _ = write!(text, "\n```\n{}\n```", bars(round).join("\n"));
+        let _ = write!(text, "\n```\n{}\n```", bars(&rows(tally, round)).join("\n"));
+        let _ = writeln!(text, "Share of the weight of all organisations");
         if tally.rounds.len() > 1 {
             let rounds = tally.rounds.len();
             let _ = writeln!(text, "After {rounds} rounds of instant runoff");
         }
-        if tally.abstained > 0.0 {
-            let abstained = percent(tally.abstained);
-            let _ = writeln!(text, "{abstained} of the vote abstained");
+        text.push('\n');
+
+        let total = round.total();
+        let leader = match tally.outcome {
+            Outcome::Passed(number) => round.scores.iter().find(|(option, _)| *option == number),
+            _ => None,
+        };
+        if let Some((number, score)) = leader
+            && total > 0.0
+        {
+            let share = percent(score / total);
+            let _ = writeln!(
+                text,
+                "Option {number} has **{share}** of the vote that counted, more than half is needed"
+            );
         }
     } else {
         text.push('\n');
     }
 
+    let entities = tally.standings.len();
+    // Smallest number of entities that meets the coalition quorum
+    let needed = (tally.coalition_quorum * entities as f64 - 1e-9)
+        .ceil()
+        .max(0.0) as usize;
     let _ = write!(
         text,
-        "**{}** ballots, **{}** of **{}** organisations reached quorum",
-        tally.ballots.len(),
+        "Quorum: **{}** of **{entities}** organisations, **{needed}** needed\n**{}** {}",
         tally.counting(),
-        tally.standings.len()
+        tally.ballots.len(),
+        plural(tally.ballots.len(), "ballot", "ballots"),
     );
     if !tally.rejected.is_empty() {
         let rejected = tally.rejected.len();
-        let replies = if rejected == 1 { "reply" } else { "replies" };
-        let _ = write!(text, "\n**{rejected}** {replies} not counted");
+        let replies = plural(rejected, "reply", "replies");
+        let _ = write!(text, ", **{rejected}** {replies} not counted");
     }
     text
+}
+
+fn plural<'a>(count: usize, one: &'a str, many: &'a str) -> &'a str {
+    if count == 1 { one } else { many }
 }
 
 fn headline(tally: &Tally) -> String {
@@ -262,17 +284,42 @@ fn headline(tally: &Tally) -> String {
     format!("{outcome}\n{window}")
 }
 
-/// A bar for each option of a round, aligned for a code block
-fn bars(round: &Round) -> Vec<String> {
-    let total = round.total();
-    round
+/// Where the weight of every organisation went: to the options still in the race, to an
+/// abstention, or nowhere when its organisation is under quorum
+fn rows(tally: &Tally, round: &Round) -> Vec<(String, f64)> {
+    let weight = |standing: &Standing| (standing.roster as f64).sqrt();
+    let all: f64 = tally.standings.iter().map(weight).sum();
+    let counting = tally.standings.iter().filter(|standing| standing.counts);
+    let counted = if all > 0.0 {
+        counting.map(weight).sum::<f64>() / all
+    } else {
+        0.0
+    };
+
+    // The scores are shares of the weight that counts
+    let mut rows: Vec<(String, f64)> = round
         .scores
         .iter()
-        .map(|(number, score)| {
-            let share = if total > 0.0 { score / total } else { 0.0 };
+        .map(|(number, score)| (format!("Option {number}"), score * counted))
+        .collect();
+    rows.push(("Abstained".to_string(), tally.abstained * counted));
+    // Ballots whose every ranked option is out of the runoff
+    let exhausted = (1.0 - tally.abstained - round.total()) * counted;
+    if exhausted >= 0.0005 {
+        rows.push(("No option left".to_string(), exhausted));
+    }
+    rows.push(("Under quorum".to_string(), 1.0 - counted));
+    rows
+}
+
+/// One bar per row, aligned to fit in a code block
+fn bars(rows: &[(String, f64)]) -> Vec<String> {
+    let width = rows.iter().map(|(label, _)| label.len()).max().unwrap_or(0);
+    rows.iter()
+        .map(|(label, share)| {
             let filled = ((share * BAR as f64).round() as usize).min(BAR);
             let bar = "█".repeat(filled) + &"░".repeat(BAR - filled);
-            format!("Option {number}  {bar}  {:>6}", percent(share))
+            format!("{label:<width$}  {bar}  {:>6}", percent(*share))
         })
         .collect()
 }
@@ -492,18 +539,24 @@ mod tests {
 
     #[test]
     fn the_summary_is_the_outcome_and_the_scores() {
-        // √2 for fyra, 1 for dave alone in the unaffiliated block
+        // √2 for fyra and 1 for dave alone in the unaffiliated block, out of the √2 + √3 + √2 + 1
+        // of everyone
         assert_eq!(
             overview(&closed()),
             "**Option 1 passed**\n\
              Square roots\n\
              Closed <t:1789256856:R>\n\
              ```\n\
-             Option 1  ███████░░░░░   58.6%\n\
-             Option 2  █████░░░░░░░   41.4%\n\
+             Option 1      ███░░░░░░░░░   25.4%\n\
+             Option 2      ██░░░░░░░░░░   18.0%\n\
+             Abstained     ░░░░░░░░░░░░    0.0%\n\
+             Under quorum  ███████░░░░░   56.6%\n\
              ```\
-             **4** ballots, **2** of **4** organisations reached quorum\n\
-             **1** reply not counted"
+             Share of the weight of all organisations\n\
+             \n\
+             Option 1 has **58.6%** of the vote that counted, more than half is needed\n\
+             Quorum: **2** of **4** organisations, **2** needed\n\
+             **4** ballots, **1** reply not counted"
         );
     }
 
@@ -512,8 +565,10 @@ mod tests {
         let tally = count(&[reply("alice", "Option 2"), reply("dave", "abstain")], 2);
         let overview = overview(&tally);
         assert!(overview.starts_with("**Option 2 is ahead**\nEqual shares\nOpen until <t:"));
-        assert!(overview.contains("Option 2  ████████████  100.0%\n"));
-        assert!(overview.contains("```41.4% of the vote abstained\n**2** ballots"));
+        assert!(overview.contains("Option 2      ███░░░░░░░░░   25.4%\n"));
+        assert!(overview.contains("Abstained     ██░░░░░░░░░░   18.0%\n"));
+        assert!(overview.contains("Option 2 has **100.0%** of the vote that counted"));
+        assert!(overview.ends_with("**2** needed\n**2** ballots"));
     }
 
     #[test]
@@ -523,7 +578,8 @@ mod tests {
             overview(&tally),
             "**Void**, not enough organisations reached quorum\n\
              Closed <t:1789256856:R>\n\
-             **1** ballots, **1** of **4** organisations reached quorum"
+             Quorum: **1** of **4** organisations, **2** needed\n\
+             **1** ballot"
         );
     }
 
@@ -572,7 +628,7 @@ mod tests {
             ],
             48,
         );
-        assert!(overview(&tally).contains("```After 2 rounds of instant runoff\n"));
+        assert!(overview(&tally).contains("organisations\nAfter 2 rounds of instant runoff\n"));
 
         let fields = fields(&tally);
         let rounds = field(&fields, "Runoff");
