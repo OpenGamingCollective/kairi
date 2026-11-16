@@ -539,7 +539,7 @@ mod tests {
 
     #[test]
     fn the_summary_is_the_outcome_and_the_scores() {
-        // √2 for fyra and 1 for dave alone in the unaffiliated block, out of the √2 + √3 + √2 + 1
+        // √2 for fyra and 1 for dave alone in the unaffiliated block, out of the √2 + √3 + 1 + 1
         // of everyone
         assert_eq!(
             overview(&closed()),
@@ -547,10 +547,10 @@ mod tests {
              Square roots\n\
              Closed <t:1789256856:R>\n\
              ```\n\
-             Option 1      ███░░░░░░░░░   25.4%\n\
-             Option 2      ██░░░░░░░░░░   18.0%\n\
+             Option 1      ███░░░░░░░░░   27.5%\n\
+             Option 2      ██░░░░░░░░░░   19.4%\n\
              Abstained     ░░░░░░░░░░░░    0.0%\n\
-             Under quorum  ███████░░░░░   56.6%\n\
+             Under quorum  ██████░░░░░░   53.1%\n\
              ```\
              Share of the weight of all organisations\n\
              \n\
@@ -565,8 +565,8 @@ mod tests {
         let tally = count(&[reply("alice", "Option 2"), reply("dave", "abstain")], 2);
         let overview = overview(&tally);
         assert!(overview.starts_with("**Option 2 is ahead**\nEqual shares\nOpen until <t:"));
-        assert!(overview.contains("Option 2      ███░░░░░░░░░   25.4%\n"));
-        assert!(overview.contains("Abstained     ██░░░░░░░░░░   18.0%\n"));
+        assert!(overview.contains("Option 2      ███░░░░░░░░░   27.5%\n"));
+        assert!(overview.contains("Abstained     ██░░░░░░░░░░   19.4%\n"));
         assert!(overview.contains("Option 2 has **100.0%** of the vote that counted"));
         assert!(overview.ends_with("**2** needed\n**2** ballots"));
     }
@@ -609,7 +609,7 @@ mod tests {
             field(&fields, "❌ Nobara"),
             ["1/3 voted, under quorum", "**Option 2**: frank"]
         );
-        assert_eq!(field(&fields, "❌ Universal Blue"), ["0/2 voted"]);
+        assert_eq!(field(&fields, "❌ Universal Blue"), ["0/1 voted"]);
         assert_eq!(
             field(&fields, "Not counted (1)"),
             ["[mallory](https://l/mallory/) voted from an address that isn't on the roster"]
