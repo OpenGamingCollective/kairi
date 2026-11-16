@@ -2,7 +2,7 @@
 //! a dual-gate quorum, <https://lists.opengamingcollective.org/governance/2ba6fc23-d466-44ec-b472-4d558ec9797d@gmail.com/>
 //!
 //! - Each organisation weighs the square root of its roster, the unaffiliated members weigh
-//!   as one block
+//!   as one block. Only the members with a valid email are on a roster
 //! - Internal quorum: an organisation only counts when enough of its roster voted
 //! - Coalition quorum: the vote is void unless enough of the organisations and the block count
 //! - The weights are normalised among those that count, each shares its weight equally
@@ -403,10 +403,12 @@ mod tests {
     const MAIL: &str = "Voting will be open for 24 hours.\nOption 1: a\nOption 2: b\n";
     const THREE: &str = "Option 1: a\nOption 2: b\nOption 3: c\n";
 
-    /// `big` has four members, `duo` two, `solo` one, and two members are unaffiliated
+    /// `big` has four members, `duo` two, `solo` one, and four members are unaffiliated, `mute`
+    /// has no email
     fn roster() -> Roster {
         let members: Vec<String> = [
-            "big1", "big2", "big3", "big4", "duo1", "duo2", "solo1", "free1", "free2", "mute",
+            "big1", "big2", "big3", "big4", "duo1", "duo2", "solo1", "free1", "free2", "free3",
+            "mute",
         ]
         .iter()
         .map(|name| {
@@ -501,11 +503,12 @@ mod tests {
             standing(&tally, UNAFFILIATED).weight,
             3f64.sqrt() / pool
         ));
+        // mute can't vote, the block is the size of the three who can
         assert_eq!(standing(&tally, UNAFFILIATED).roster, 3);
 
         assert!(close(score(&tally, 0, 1), 2.0 / pool));
         assert_eq!(tally.outcome, Outcome::Passed(2));
-        assert_eq!((tally.members, tally.eligible), (10, 9));
+        assert_eq!((tally.members, tally.eligible), (11, 10));
     }
 
     #[test]

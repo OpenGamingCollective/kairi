@@ -47,13 +47,23 @@ struct Group {
     members: Vec<String>,
 }
 
+impl Member {
+    /// Only the members with a valid email vote, and only they count in the size of an entity
+    fn can_vote(&self) -> bool {
+        let email = self.email.trim();
+        let whole = !email.contains(char::is_whitespace);
+        let parts = email.split_once('@');
+        whole && parts.is_some_and(|(local, domain)| !local.is_empty() && !domain.is_empty())
+    }
+}
+
 /// An organisation, or the block of the unaffiliated members
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entity {
     pub slug: String,
     pub name: String,
     pub unaffiliated: bool,
-    /// Usernames, each member is in a single entity
+    /// Usernames of its members who can vote, each member is in a single entity
     pub members: BTreeSet<String>,
 }
 
@@ -67,12 +77,16 @@ impl Roster {
         self.members.len()
     }
 
-    /// Members who gave an email, the others can't vote
+    /// Members with a valid email, the others can't vote
     pub fn eligible(&self) -> usize {
         self.members
             .values()
-            .filter(|member| !member.email.trim().is_empty())
+            .filter(|member| member.can_vote())
             .count()
+    }
+
+    fn can_vote(&self, username: &str) -> bool {
+        self.members.get(username).is_some_and(Member::can_vote)
     }
 
     /// Username of the member who owns the address
@@ -87,9 +101,10 @@ impl Roster {
             .map(|(username, _)| username.as_str())
     }
 
-    /// Organisations sorted by slug then the unaffiliated block, the empty ones are left out
+    /// Organisations sorted by slug then the unaffiliated block
     ///
-    /// A member listed by several organisations only belongs to the first of them
+    /// Only the members who can vote are in them, an entity where nobody can is left out. A
+    /// member listed by several organisations only belongs to the first of them
     pub fn entities(&self) -> Vec<Entity> {
         let mut affiliated: BTreeSet<&String> = BTreeSet::new();
         let mut entities: Vec<Entity> = self
@@ -107,6 +122,7 @@ impl Roster {
                 members: group
                     .members
                     .iter()
+                    .filter(|username| self.can_vote(username))
                     .filter(|username| affiliated.insert(username))
                     .cloned()
                     .collect(),
@@ -117,6 +133,7 @@ impl Roster {
         let unaffiliated: BTreeSet<String> = self
             .members
             .keys()
+            .filter(|username| self.can_vote(username))
             .filter(|username| !affiliated.contains(username))
             .cloned()
             .collect();
@@ -194,6 +211,41 @@ mod tests {
         assert_eq!(roster.member_of(""), None);
         assert_eq!(roster.members(), 5);
         assert_eq!(roster.eligible(), 4);
+    }
+
+    #[test]
+    fn only_members_with_a_valid_email_are_in_an_entity() {
+        let roster = Roster::parse(
+            r#"{
+                "members": {
+                    "alice": { "email": "alice@example.org" },
+                    "bob": { "email": "" },
+                    "carol": { "email": "not an email" },
+                    "dave": { "email": "dave@" },
+                    "erin": { "email": " erin@example.org " },
+                    "frank": {}
+                },
+                "groups": {
+                    "fyra": { "org": true, "members": ["alice", "bob", "carol", "stranger"] },
+                    "ublue": { "org": true, "members": ["dave"] }
+                }
+            }"#,
+        )
+        .unwrap();
+        assert_eq!((roster.members(), roster.eligible()), (6, 2));
+
+        let entities = roster.entities();
+        let members = |entity: &Entity| entity.members.iter().cloned().collect::<Vec<_>>();
+        // Nobody can vote for ublue, and frank isn't in the unaffiliated block
+        assert_eq!(entities.len(), 2);
+        assert_eq!(
+            (&*entities[0].slug, members(&entities[0])),
+            ("fyra", vec!["alice".to_string()])
+        );
+        assert_eq!(
+            (&*entities[1].slug, members(&entities[1])),
+            (UNAFFILIATED, vec!["erin".to_string()])
+        );
     }
 
     #[test]
