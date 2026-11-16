@@ -3,7 +3,7 @@
 use std::{path::PathBuf, time::Instant};
 
 use kameo::prelude::*;
-use public_inbox::{List, MailingListError, Reader, Thread};
+use public_inbox::{List, Mail, MailingListError, Message as Email, Reader, Thread};
 use tracing::{Span, info, instrument};
 
 use crate::types::MailingListEnum;
@@ -27,6 +27,24 @@ pub struct FetchThread {
     pub list: MailingListEnum,
     pub uid: String,
     /// Who asked, for the logs, e.g. `discord /thread @user`
+    pub requested_by: String,
+}
+
+/// Find the thread a mail belongs to, given the Message-ID of any mail in it
+#[derive(Debug, Clone)]
+pub struct FindThread {
+    pub list: MailingListEnum,
+    pub message_id: String,
+    /// Who's asking, for the logs
+    pub requested_by: String,
+}
+
+/// Fetch full mails, in the order they were asked for
+#[derive(Debug, Clone)]
+pub struct FetchMessages {
+    pub list: MailingListEnum,
+    pub mails: Vec<Mail>,
+    /// Who's asking, for the logs
     pub requested_by: String,
 }
 
@@ -103,6 +121,79 @@ impl Message<FetchThread> for PublicInboxReader {
             None => info!(elapsed_ms, "no such thread"),
         }
         Ok(thread)
+    }
+}
+
+impl Message<FindThread> for PublicInboxReader {
+    type Reply = public_inbox::Result<Option<Thread>>;
+
+    #[instrument(
+        name = "FindThread",
+        skip_all,
+        fields(%list, message_id = %message_id, requested_by = %requested_by),
+        err(level = "warn")
+    )]
+    async fn handle(
+        &mut self,
+        FindThread {
+            list,
+            message_id,
+            requested_by,
+        }: FindThread,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let started = Instant::now();
+        let reader = self.reader(list);
+        let span = Span::current();
+        let thread =
+            tokio::task::spawn_blocking(move || span.in_scope(|| reader.find_thread(&message_id)))
+                .await
+                .map_err(MailingListError::from)??;
+
+        let elapsed_ms = started.elapsed().as_millis();
+        match &thread {
+            Some(thread) => info!(uid = thread.uid(), elapsed_ms, "served"),
+            None => info!(elapsed_ms, "no such mail"),
+        }
+        Ok(thread)
+    }
+}
+
+impl Message<FetchMessages> for PublicInboxReader {
+    type Reply = public_inbox::Result<Vec<Email<'static>>>;
+
+    #[instrument(
+        name = "FetchMessages",
+        skip_all,
+        fields(%list, mails = mails.len(), requested_by = %requested_by),
+        err(level = "warn")
+    )]
+    async fn handle(
+        &mut self,
+        FetchMessages {
+            list,
+            mails,
+            requested_by,
+        }: FetchMessages,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let started = Instant::now();
+        let reader = self.reader(list);
+        let span = Span::current();
+        let messages = tokio::task::spawn_blocking(move || {
+            span.in_scope(|| {
+                mails
+                    .iter()
+                    .map(|mail| reader.message(mail))
+                    .collect::<public_inbox::Result<Vec<_>>>()
+            })
+        })
+        .await
+        .map_err(MailingListError::from)??;
+
+        let elapsed_ms = started.elapsed().as_millis();
+        info!(elapsed_ms, "served");
+        Ok(messages)
     }
 }
 
