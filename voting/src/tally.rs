@@ -56,8 +56,6 @@ pub struct Reply {
     pub sender: Option<String>,
     pub date: DateTime<Utc>,
     pub url: String,
-    /// Whether it replies to the first mail, as asked, and not to another reply
-    pub to_first_mail: bool,
     pub body: String,
 }
 
@@ -68,7 +66,6 @@ pub struct Ballot {
     pub member: String,
     pub vote: Vote,
     pub url: String,
-    pub to_first_mail: bool,
     /// Whether any of the member's organisations, or the unaffiliated block, counted
     pub counted: bool,
 }
@@ -315,7 +312,6 @@ fn collect(
                         member: member.to_string(),
                         vote,
                         url: reply.url.clone(),
-                        to_first_mail: reply.to_first_mail,
                         counted: false,
                     },
                 );
@@ -440,7 +436,6 @@ mod tests {
             sender: Some(format!("{member}@example.org")),
             date: sent() + TimeDelta::hours(hours),
             url: format!("https://l/{member}/{hours}/"),
-            to_first_mail: true,
             body: body.to_string(),
         }
     }
