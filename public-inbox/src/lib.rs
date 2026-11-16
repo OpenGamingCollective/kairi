@@ -14,4 +14,3 @@ pub use message::Mail;
 pub use mirror::{Mirror, reindex};
 pub use reader::{List, Reader};
 pub use thread::{Thread, ThreadSummary};
-
