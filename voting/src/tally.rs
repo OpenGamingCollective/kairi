@@ -101,6 +101,8 @@ pub struct Standing {
     pub unaffiliated: bool,
     pub roster: usize,
     pub voted: usize,
+    /// Usernames of its members who voted
+    pub voters: Vec<String>,
     /// Whether it passed the internal quorum
     pub counts: bool,
     /// Its share of the vote, or 0 if it doesn't count
@@ -178,11 +180,13 @@ pub fn tally(
         .iter()
         .map(|entity| {
             let roster = entity.members.len();
-            let voted = entity
+            let voters: Vec<String> = entity
                 .members
                 .iter()
                 .filter(|member| ballots.contains_key(*member))
-                .count();
+                .cloned()
+                .collect();
+            let voted = voters.len();
             let counts = voted > 0
                 && (entity.unaffiliated || voted as f64 >= policy.internal_quorum * roster as f64);
             Standing {
@@ -191,6 +195,7 @@ pub fn tally(
                 unaffiliated: entity.unaffiliated,
                 roster,
                 voted,
+                voters,
                 counts,
                 weight: 0.0,
             }
