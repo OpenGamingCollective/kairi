@@ -4,7 +4,7 @@ use std::fmt::Write;
 
 use kameo::error::SendError;
 use poise::serenity_prelude as serenity;
-use voting::{Outcome, Reason, Round, Tally, Vote};
+use voting::{Ballot, Outcome, Reason, Round, Tally, Vote};
 
 use super::{SerenityContext, SerenityError};
 use crate::{
@@ -15,6 +15,11 @@ use crate::{
 /// Discord's limits
 const TITLE: usize = 256;
 const FIELD: usize = 1024;
+const FIELDS: usize = 25;
+const EMBED: usize = 6000;
+
+/// Discord trims the spaces a line starts with, not this one
+const INDENT: &str = "\u{2003}";
 const CHOICE: usize = 100;
 const CHOICES: usize = 25;
 
@@ -86,19 +91,41 @@ fn embed(count: &Count) -> serenity::CreateEmbed {
         Outcome::Tied | Outcome::Void | Outcome::NoVotes => RED,
     };
 
+    let title = truncate(&count.name, TITLE);
+    let description = headline(tally);
+    let footer = format!(
+        "{} members, {} of them can vote",
+        tally.members, tally.eligible
+    );
+
+    // Long fields spill over into the next one as long as the embed has room
+    let size = |text: &str| text.chars().count();
+    let mut room = EMBED.saturating_sub(size(&title) + size(&description) + size(&footer));
+    let fields: Vec<(String, String, bool)> = fields(tally)
+        .into_iter()
+        .flat_map(|(name, lines)| {
+            let texts = chunks(&lines, FIELD).into_iter().enumerate();
+            texts.map(move |(position, text)| match position {
+                0 => (name.clone(), text, false),
+                _ => (format!("{name}, continued"), text, false),
+            })
+        })
+        .take(FIELDS)
+        .take_while(|(name, text, _)| {
+            let fits = size(name) + size(text) <= room;
+            if fits {
+                room -= size(name) + size(text);
+            }
+            fits
+        })
+        .collect();
+
     serenity::CreateEmbed::new()
-        .title(truncate(&count.name, TITLE))
+        .title(title)
         .url(&count.url)
-        .description(headline(tally))
-        .fields(
-            fields(tally)
-                .into_iter()
-                .map(|(name, lines)| (name, fit(&lines, FIELD), false)),
-        )
-        .footer(serenity::CreateEmbedFooter::new(format!(
-            "{} members, {} of them can vote",
-            tally.members, tally.eligible
-        )))
+        .description(description)
+        .fields(fields)
+        .footer(serenity::CreateEmbedFooter::new(footer))
         .colour(colour)
 }
 
@@ -136,26 +163,20 @@ fn fields(tally: &Tally) -> Vec<(String, Vec<String>)> {
         fields.push(("Result".to_string(), result(tally)));
     }
 
-    let mut quorum = vec![format!(
-        "{} of {} count, {} needed",
-        tally.counting(),
-        tally.standings.len(),
-        percent(tally.coalition_quorum)
-    )];
-    quorum.extend(tally.standings.iter().map(|standing| {
-        let voted = format!("{}/{} voted", standing.voted, standing.roster);
-        if standing.counts {
-            let weight = percent(standing.weight);
-            format!("✅ {}: {voted}, {weight} of the vote", standing.name)
-        } else {
-            format!("❌ {}: {voted}", standing.name)
-        }
-    }));
-    fields.push(("Quorum".to_string(), quorum));
+    let name = format!("Ballots ({})", tally.ballots.len());
+    fields.push((name, ballots(tally)));
 
-    if !tally.ballots.is_empty() {
-        let name = format!("Ballots ({})", tally.ballots.len());
-        fields.push((name, ballots(tally)));
+    let notes: Vec<String> = tally
+        .ballots
+        .iter()
+        .filter(|ballot| !ballot.to_first_mail)
+        .map(|ballot| {
+            let member = &ballot.member;
+            format!("{member} replied to another reply, not to the first mail")
+        })
+        .collect();
+    if !notes.is_empty() {
+        fields.push(("Notes".to_string(), notes));
     }
 
     if !tally.rejected.is_empty() {
@@ -214,7 +235,7 @@ fn result(tally: &Tally) -> Vec<String> {
     lines
 }
 
-/// Members by what they voted, in the order of the motion then the rankings and abstentions
+/// Each organisation with its turnout and its share of the vote, then what its members voted
 fn ballots(tally: &Tally) -> Vec<String> {
     let label = |vote: &Vote| match vote {
         Vote::Abstain => "Abstained".to_string(),
@@ -224,42 +245,46 @@ fn ballots(tally: &Tally) -> Vec<String> {
         }
     };
 
-    let mut votes: Vec<&Vote> = Vec::new();
-    for ballot in &tally.ballots {
-        if !votes.contains(&&ballot.vote) {
-            votes.push(&ballot.vote);
-        }
-    }
-    votes.sort_by_key(|vote| match vote {
-        Vote::Ranked(options) => (0, options.clone()),
-        Vote::Abstain => (1, Vec::new()),
-    });
+    let mut lines = vec![format!(
+        "{} of {} count, {} needed",
+        tally.counting(),
+        tally.standings.len(),
+        percent(tally.coalition_quorum)
+    )];
+    for standing in &tally.standings {
+        let turnout = format!("{}/{}", standing.voted, standing.roster);
+        lines.push(if standing.counts {
+            let weight = percent(standing.weight);
+            format!("✅ {}, {turnout}, {weight}", standing.name)
+        } else {
+            format!("❌ {}, {turnout}", standing.name)
+        });
 
-    let (mut misplaced, mut uncounted) = (false, false);
-    let mut lines: Vec<String> = votes
-        .into_iter()
-        .map(|vote| {
-            let members: Vec<String> = tally
-                .ballots
+        let cast: Vec<&Ballot> = tally
+            .ballots
+            .iter()
+            .filter(|ballot| standing.voters.contains(&ballot.member))
+            .collect();
+        // Same order as the motion, with abstentions last
+        let mut votes: Vec<&Vote> = Vec::new();
+        for ballot in &cast {
+            if !votes.contains(&&ballot.vote) {
+                votes.push(&ballot.vote);
+            }
+        }
+        votes.sort_by_key(|vote| match vote {
+            Vote::Ranked(options) => (0, options.clone()),
+            Vote::Abstain => (1, Vec::new()),
+        });
+
+        for vote in votes {
+            let members: Vec<&str> = cast
                 .iter()
                 .filter(|ballot| ballot.vote == *vote)
-                .map(|ballot| {
-                    misplaced |= !ballot.to_first_mail;
-                    uncounted |= !ballot.counted;
-                    let misplaced = if ballot.to_first_mail { "" } else { "†" };
-                    let uncounted = if ballot.counted { "" } else { "‡" };
-                    format!("{}{misplaced}{uncounted}", ballot.member)
-                })
+                .map(|ballot| ballot.member.as_str())
                 .collect();
-            format!("**{}**: {}", label(vote), members.join(", "))
-        })
-        .collect();
-
-    if misplaced {
-        lines.push("† replied to another reply, not to the first mail".to_string());
-    }
-    if uncounted {
-        lines.push("‡ their organisation is under its quorum and doesn't count".to_string());
+            lines.push(format!("{INDENT}{}: {}", label(vote), members.join(", ")));
+        }
     }
     lines
 }
@@ -268,31 +293,25 @@ fn percent(share: f64) -> String {
     format!("{:.1}%", share * 100.0)
 }
 
-/// As many whole lines as fit in `limit` characters, and how many don't
-fn fit(lines: &[String], limit: usize) -> String {
+/// Pack whole lines into chunks of at most `limit` characters
+fn chunks(lines: &[String], limit: usize) -> Vec<String> {
+    let mut chunks = Vec::new();
     let mut text = String::new();
-    for (position, line) in lines.iter().enumerate() {
-        let left = lines.len() - position;
-        let more = format!("… and {left} more");
-        let needed = text.chars().count() + line.chars().count() + 1;
-        // Keep room to say what is left out
-        let reserve = if left > 1 {
-            more.chars().count() + 1
-        } else {
-            0
-        };
-        if needed + reserve > limit {
-            if text.is_empty() {
-                // A line longer than the field, better cut than left out
-                return truncate(line, limit);
-            }
-            text.push_str(&truncate(&more, limit.saturating_sub(text.chars().count())));
-            break;
+    for line in lines {
+        // A line longer than a chunk gets cut
+        let line = truncate(line, limit);
+        if !text.is_empty() && text.chars().count() + 1 + line.chars().count() > limit {
+            chunks.push(std::mem::take(&mut text));
         }
-        text.push_str(line);
-        text.push('\n');
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str(&line);
     }
-    text.trim_end().to_string()
+    if !text.is_empty() {
+        chunks.push(text);
+    }
+    chunks
 }
 
 /// Cut down to at most `limit` characters
@@ -382,21 +401,19 @@ mod tests {
             ["Option 1: **58.6%**", "Option 2: **41.4%**"]
         );
         assert_eq!(
-            field(&fields, "Quorum"),
+            field(&fields, "Ballots (3)"),
             [
                 "2 of 3 count, 50.0% needed",
-                "✅ Fyra Labs: 2/2 voted, 58.6% of the vote",
-                "❌ Universal Blue: 0/2 voted",
-                "✅ Unaffiliated: 1/1 voted, 41.4% of the vote",
+                "✅ Fyra Labs, 2/2, 58.6%",
+                "\u{2003}Option 1: alice, bob",
+                "❌ Universal Blue, 0/2",
+                "✅ Unaffiliated, 1/1, 41.4%",
+                "\u{2003}Option 2: dave",
             ]
         );
         assert_eq!(
-            field(&fields, "Ballots (3)"),
-            [
-                "**Option 1**: alice, bob†",
-                "**Option 2**: dave",
-                "† replied to another reply, not to the first mail",
-            ]
+            field(&fields, "Notes"),
+            ["bob replied to another reply, not to the first mail"]
         );
         assert_eq!(
             field(&fields, "Not counted (1)"),
@@ -428,17 +445,29 @@ mod tests {
 
         let fields = fields(&tally);
         assert!(fields.iter().all(|(name, _)| name != "Result"));
-        assert_eq!(field(&fields, "Ballots (1)"), ["**Option 2**: carol"]);
+        assert!(fields.iter().all(|(name, _)| name != "Notes"));
+        assert_eq!(
+            field(&fields, "Ballots (1)"),
+            [
+                "1 of 3 count, 50.0% needed",
+                "❌ Fyra Labs, 0/2",
+                "✅ Universal Blue, 1/2, 100.0%",
+                "\u{2003}Option 2: carol",
+                "❌ Unaffiliated, 0/1",
+            ]
+        );
     }
 
     #[test]
-    fn long_fields_say_what_they_leave_out() {
-        let lines: Vec<String> = (0..10).map(|line| format!("line {line}")).collect();
-        assert_eq!(fit(&lines[..2], 100), "line 0\nline 1");
-        assert_eq!(fit(&lines, 40), "line 0\nline 1\nline 2\n… and 7 more");
-        assert!(fit(&lines, 40).chars().count() <= 40);
-
-        assert_eq!(fit(&lines[..1], 5), "line…");
+    fn long_fields_go_on_in_the_next_one() {
+        let lines: Vec<String> = (0..5).map(|line| format!("line {line}")).collect();
+        assert_eq!(chunks(&lines[..2], 100), ["line 0\nline 1"]);
+        assert_eq!(
+            chunks(&lines, 13),
+            ["line 0\nline 1", "line 2\nline 3", "line 4"]
+        );
+        assert_eq!(chunks(&lines[..1], 5), ["line…"]);
+        assert!(chunks(&[], 5).is_empty());
 
         assert_eq!(truncate("hello", 5), "hello");
         assert_eq!(truncate("hello!", 5), "hell…");
