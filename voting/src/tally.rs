@@ -12,7 +12,7 @@
 //!
 //! What the approved text leaves open is decided here: the quorums come from the [`Policy`],
 //! the block of the unaffiliated has no internal quorum since it has no stance to form, and a
-//! member of several organisations votes in each of them
+//! member listed by several organisations only votes in the first of them
 
 use std::collections::BTreeMap;
 
@@ -491,19 +491,20 @@ mod tests {
             ("free1", "Option 2"),
         ]));
 
-        // big 2, duo √2, solo √2 (big1 is on both rosters), unaffiliated √3
-        let pool = 2.0 + 2.0 * 2f64.sqrt() + 3f64.sqrt();
+        // big 2, duo √2, unaffiliated √3. solo also lists big1, who only votes in big
+        let pool = 2.0 + 2f64.sqrt() + 3f64.sqrt();
         assert!(close(standing(&tally, "big").weight, 2.0 / pool));
         assert!(close(standing(&tally, "duo").weight, 2f64.sqrt() / pool));
-        assert!(close(standing(&tally, "solo").weight, 2f64.sqrt() / pool));
+        let solo = standing(&tally, "solo");
+        assert_eq!((solo.roster, solo.voted, solo.counts), (1, 0, false));
         assert!(close(
             standing(&tally, UNAFFILIATED).weight,
             3f64.sqrt() / pool
         ));
         assert_eq!(standing(&tally, UNAFFILIATED).roster, 3);
 
-        assert!(close(score(&tally, 0, 1), (2.0 + 2f64.sqrt()) / pool));
-        assert_eq!(tally.outcome, Outcome::Passed(1));
+        assert!(close(score(&tally, 0, 1), 2.0 / pool));
+        assert_eq!(tally.outcome, Outcome::Passed(2));
         assert_eq!((tally.members, tally.eligible), (10, 9));
     }
 
@@ -517,9 +518,8 @@ mod tests {
             ("duo2", "Option 1"),
         ]));
 
-        // solo counts too, big1 voted
-        let pool = 2.0 + 2.0 * 2f64.sqrt();
-        let first = 2.0 / 3.0 + 2f64.sqrt() + 2f64.sqrt();
+        let pool = 2.0 + 2f64.sqrt();
+        let first = 2.0 / 3.0 + 2f64.sqrt();
         assert!(close(score(&tally, 0, 1), first / pool));
         assert!(close(score(&tally, 0, 2), (4.0 / 3.0) / pool));
     }
@@ -705,12 +705,12 @@ mod tests {
             &Policy::default(),
         );
 
-        // duo √2: half to 1, half to 3. unaffiliated √3 to 2. solo √2 to 3
+        // duo √2: half to 1, half to 3. unaffiliated √3 to 2. solo 1 to 3
         assert_eq!(tally.rounds.len(), 2);
         assert_eq!(tally.rounds[0].eliminated, [1]);
         assert_eq!(tally.rounds[1].scores.len(), 2);
         // duo1's ballot moves to option 2
-        let pool = 2.0 * 2f64.sqrt() + 3f64.sqrt();
+        let pool = 2f64.sqrt() + 3f64.sqrt() + 1.0;
         assert!(close(
             score(&tally, 1, 2),
             (3f64.sqrt() + 2f64.sqrt() / 2.0) / pool
@@ -724,21 +724,21 @@ mod tests {
             THREE,
             &votes(&[
                 ("duo1", "Option 1"),
-                ("duo2", "Option 3"),
-                ("free1", "Option 2"),
-                ("solo1", "Option 3 > Option 1"),
-                ("big1", "Option 3"),
+                ("duo2", "Option 2"),
+                ("free1", "Option 3 > Option 1"),
+                ("free2", "Option 2"),
+                ("solo1", "Option 3"),
             ]),
             &Policy::default(),
         );
 
-        // 1: √2/2, 2: √3, 3: √2/2 + √2, nobody has half of 2√2 + √3
+        // 1: √2/2, 2: √2/2 + √3/2, 3: √3/2 + 1, nobody has half of √2 + √3 + 1
         assert_eq!(tally.rounds[0].eliminated, [1]);
         // duo1 only ranked option 1, the race goes on without them
-        let pool = 2f64.sqrt() * 1.5 + 3f64.sqrt();
+        let pool = 2f64.sqrt() + 3f64.sqrt() + 1.0;
         assert!(close(
             tally.rounds[1].total(),
-            pool / (2.0 * 2f64.sqrt() + 3f64.sqrt())
+            1.0 - 2f64.sqrt() / 2.0 / pool
         ));
         assert_eq!(tally.outcome, Outcome::Passed(3));
     }

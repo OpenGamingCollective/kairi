@@ -53,7 +53,7 @@ pub struct Entity {
     pub slug: String,
     pub name: String,
     pub unaffiliated: bool,
-    /// Usernames, a member can be on the roster of several organisations
+    /// Usernames, each member is in a single entity
     pub members: BTreeSet<String>,
 }
 
@@ -88,11 +88,14 @@ impl Roster {
     }
 
     /// Organisations sorted by slug then the unaffiliated block, the empty ones are left out
+    ///
+    /// A member listed by several organisations only belongs to the first of them
     pub fn entities(&self) -> Vec<Entity> {
+        let mut affiliated: BTreeSet<&String> = BTreeSet::new();
         let mut entities: Vec<Entity> = self
             .groups
             .iter()
-            .filter(|(_, group)| group.org && !group.members.is_empty())
+            .filter(|(_, group)| group.org)
             .map(|(slug, group)| Entity {
                 slug: slug.clone(),
                 name: if group.description.is_empty() {
@@ -101,18 +104,20 @@ impl Roster {
                     group.description.clone()
                 },
                 unaffiliated: false,
-                members: group.members.iter().cloned().collect(),
+                members: group
+                    .members
+                    .iter()
+                    .filter(|username| affiliated.insert(username))
+                    .cloned()
+                    .collect(),
             })
             .collect();
+        entities.retain(|entity| !entity.members.is_empty());
 
         let unaffiliated: BTreeSet<String> = self
             .members
             .keys()
-            .filter(|username| {
-                !entities
-                    .iter()
-                    .any(|entity| entity.members.contains(*username))
-            })
+            .filter(|username| !affiliated.contains(username))
             .cloned()
             .collect();
         if !unaffiliated.is_empty() {
@@ -136,12 +141,14 @@ mod tests {
             "alice": { "email": "Alice@Example.org", "github": "alice", "orgRole": "admin" },
             "bob": { "email": "", "github": "" },
             "carol": { "email": "carol@example.org" },
-            "dave": { "email": "dave@example.org" }
+            "dave": { "email": "dave@example.org" },
+            "erin": { "email": "erin@example.org" }
         },
         "groups": {
             "kernel": { "description": "Kernel", "org": false, "members": ["dave"] },
             "fyra": { "description": "Fyra Labs", "org": true, "members": ["alice", "bob"] },
-            "ublue": { "description": "", "org": true, "members": ["alice"] },
+            "ublue": { "description": "", "org": true, "members": ["alice", "erin"] },
+            "zeta": { "description": "Zeta", "org": true, "members": ["bob"] },
             "empty": { "description": "Empty", "org": true, "members": [] }
         }
     }"#;
@@ -165,10 +172,12 @@ mod tests {
     }
 
     #[test]
-    fn a_member_is_on_the_roster_of_each_of_their_organisations() {
+    fn a_member_only_belongs_to_their_first_organisation() {
         let entities = Roster::parse(ROSTER).unwrap().entities();
         assert!(entities[0].members.contains("alice"));
-        assert!(entities[1].members.contains("alice"));
+        assert_eq!(entities[1].members.iter().collect::<Vec<_>>(), ["erin"]);
+        // bob was its only member
+        assert!(entities.iter().all(|entity| entity.slug != "zeta"));
     }
 
     #[test]
@@ -183,8 +192,8 @@ mod tests {
     fn a_missing_email_matches_nobody() {
         let roster = Roster::parse(ROSTER).unwrap();
         assert_eq!(roster.member_of(""), None);
-        assert_eq!(roster.members(), 4);
-        assert_eq!(roster.eligible(), 3);
+        assert_eq!(roster.members(), 5);
+        assert_eq!(roster.eligible(), 4);
     }
 
     #[test]
