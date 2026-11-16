@@ -55,17 +55,6 @@ impl Actor for Kairi {
 
         let _ = kairi.config.set(args.config.clone());
 
-        let discord = DiscordActor::supervise(
-            &actor_ref,
-            DiscordArgs {
-                token: args.config.discord.token,
-            },
-        )
-        .restart_policy(RestartPolicy::Permanent)
-        .restart_limit(5, Duration::from_secs(10))
-        .spawn()
-        .await;
-
         let _public_inbox_mirror = PublicInboxMirror::supervise(
             &actor_ref,
             PublicInboxMirrorArgs {
@@ -89,6 +78,20 @@ impl Actor for Kairi {
             VotingArgs {
                 reader: public_inbox_reader.clone(),
                 config: args.config.voting,
+            },
+        )
+        .restart_policy(RestartPolicy::Permanent)
+        .restart_limit(5, Duration::from_secs(10))
+        .spawn()
+        .await;
+
+        // Started last, since its commands talk to the other actors
+        let discord = DiscordActor::supervise(
+            &actor_ref,
+            DiscordArgs {
+                token: args.config.discord.token,
+                voting: voting.clone(),
+                reader: public_inbox_reader.clone(),
             },
         )
         .restart_policy(RestartPolicy::Permanent)
