@@ -1,6 +1,6 @@
 use std::{fs, path::PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -9,6 +9,33 @@ pub struct ConfigFile {
     pub github: GithubConfigFile,
     #[serde(default)]
     pub typesafe: TypesafeConfigFile,
+    #[serde(default)]
+    pub voting: VotingConfigFile,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(default)]
+/// Rules for counting votes on mailing list threads
+pub struct VotingConfigFile {
+    /// Path to the infra inventory JSON (members and groups). Votes can't be counted without it
+    pub roster_path: PathBuf,
+    /// Fraction of an organisation's members who must vote for it to count (0 to 1)
+    pub internal_quorum: f64,
+    /// Fraction of the entities that must count for the vote to be valid (0 to 1)
+    pub coalition_quorum: f64,
+    /// How long a vote stays open if its first mail doesn't say
+    pub window_hours: u32,
+}
+
+impl Default for VotingConfigFile {
+    fn default() -> Self {
+        Self {
+            roster_path: PathBuf::new(),
+            internal_quorum: 0.5,
+            coalition_quorum: 0.5,
+            window_hours: 24,
+        }
+    }
 }
 
 #[derive(Debug, Default, Deserialize, Serialize, Clone)]
@@ -45,6 +72,18 @@ pub struct Config {
     pub github: GithubConfig,
     #[serde(default)]
     pub typesafe: TypesafeConfig,
+    #[serde(default)]
+    pub voting: VotingConfig,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize, Clone)]
+/// Rules for counting votes on mailing list threads
+pub struct VotingConfig {
+    /// Read again on every count. `None` if it isn't set
+    pub roster_path: Option<PathBuf>,
+    pub internal_quorum: f64,
+    pub coalition_quorum: f64,
+    pub window_hours: u32,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize, Clone)]
@@ -92,6 +131,21 @@ impl Config {
         .trim()
         .to_string();
 
+        let voting = config_file.voting;
+        for (name, quorum) in [
+            ("internal_quorum", voting.internal_quorum),
+            ("coalition_quorum", voting.coalition_quorum),
+        ] {
+            ensure!(
+                (0.0..=1.0).contains(&quorum),
+                "voting.{name} must be between 0 and 1, got {quorum}"
+            );
+        }
+        ensure!(
+            voting.window_hours > 0,
+            "voting.window_hours must be above 0"
+        );
+
         Ok(Self {
             discord: DiscordConfig {
                 token: discord_token,
@@ -103,6 +157,51 @@ impl Config {
             typesafe: TypesafeConfig {
                 token: typesafe_token,
             },
+            voting: VotingConfig {
+                roster_path: (!voting.roster_path.is_empty()).then_some(voting.roster_path),
+                internal_quorum: voting.internal_quorum,
+                coalition_quorum: voting.coalition_quorum,
+                window_hours: voting.window_hours,
+            },
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const MINIMAL: &str =
+        "[discord]\ntoken = \"t\"\ntoken_path = \"\"\n[github]\napp_id = 0\npem_path = \"\"\n";
+
+    #[test]
+    fn voting_defaults_to_half_quorums_without_a_roster() {
+        let voting = Config::build(MINIMAL).unwrap().voting;
+        assert_eq!(voting.roster_path, None);
+        assert_eq!(voting.internal_quorum, 0.5);
+        assert_eq!(voting.coalition_quorum, 0.5);
+        assert_eq!(voting.window_hours, 24);
+    }
+
+    #[test]
+    fn voting_settings_are_read() {
+        let config = format!(
+            "{MINIMAL}[voting]\nroster_path = \"/run/kairi/roster.json\"\ninternal_quorum = 0.25\n"
+        );
+        let voting = Config::build(&config).unwrap().voting;
+        assert_eq!(
+            voting.roster_path,
+            Some(PathBuf::from("/run/kairi/roster.json"))
+        );
+        assert_eq!(voting.internal_quorum, 0.25);
+        assert_eq!(voting.coalition_quorum, 0.5);
+    }
+
+    #[test]
+    fn quorums_are_shares() {
+        let config = format!("{MINIMAL}[voting]\ncoalition_quorum = 50\n");
+        assert!(Config::build(&config).is_err());
+        let config = format!("{MINIMAL}[voting]\nwindow_hours = 0\n");
+        assert!(Config::build(&config).is_err());
     }
 }
