@@ -37,6 +37,9 @@ pub struct CountVotes {
 /// The count for a thread
 #[derive(Debug, Clone)]
 pub struct Count {
+    pub list: MailingListEnum,
+    /// The thread's uid
+    pub uid: String,
     pub name: String,
     pub url: String,
     pub tally: Tally,
@@ -155,6 +158,8 @@ impl Message<CountVotes> for Voting {
             "counted"
         );
         Ok(Count {
+            list,
+            uid: thread.uid().to_string(),
             name: thread.name().to_string(),
             url: thread.url(),
             tally,

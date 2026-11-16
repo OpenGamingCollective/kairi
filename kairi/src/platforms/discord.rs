@@ -30,6 +30,13 @@ impl DiscordBot {
         let framework = poise::Framework::<Data, SerenityError>::builder()
             .options(poise::FrameworkOptions {
                 commands: vec![ping(), votes::votes()],
+                event_handler: |framework, event| {
+                    Box::pin(votes::on_event(
+                        framework.serenity_context,
+                        event,
+                        framework.user_data,
+                    ))
+                },
                 ..Default::default()
             })
             .setup(move |ctx, _ready, framework| {
