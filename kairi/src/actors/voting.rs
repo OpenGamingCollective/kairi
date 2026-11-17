@@ -137,6 +137,7 @@ impl Message<CountVotes> for Voting {
             internal_quorum: self.config.internal_quorum,
             coalition_quorum: self.config.coalition_quorum,
             window: TimeDelta::hours(self.config.window_hours.into()),
+            ..Policy::default()
         };
         let tally = voting::tally(
             &motion.body,

@@ -151,7 +151,7 @@ fn colour(tally: &Tally) -> u32 {
     match tally.outcome {
         _ if tally.open => ORANGE,
         Outcome::Passed(_) => GREEN,
-        Outcome::Tied | Outcome::Void | Outcome::NoVotes => RED,
+        Outcome::NoMajority | Outcome::Tied | Outcome::Void | Outcome::NoVotes => RED,
     }
 }
 
@@ -216,15 +216,15 @@ fn overview(tally: &Tally) -> String {
         }
         text.push('\n');
 
-        let total = round.total();
         let leader = match tally.outcome {
             Outcome::Passed(number) => round.scores.iter().find(|(option, _)| *option == number),
+            Outcome::NoMajority => round.scores.iter().max_by(|a, b| a.1.total_cmp(&b.1)),
             _ => None,
         };
         if let Some((number, score)) = leader
-            && total > 0.0
+            && round.total > 0.0
         {
-            let share = percent(score / total);
+            let share = percent(score / round.total);
             let _ = writeln!(
                 text,
                 "Option {number} has **{share}** of the vote that counted, more than half is needed"
@@ -268,6 +268,10 @@ fn headline(tally: &Tally) -> String {
             let verb = if tally.open { "is ahead" } else { "passed" };
             format!("**Option {number} {verb}**\n{title}")
         }
+        Outcome::NoMajority if tally.open => "**No majority** so far".to_string(),
+        Outcome::NoMajority => {
+            "**No majority**, no option has more than half of the vote".to_string()
+        }
         Outcome::Tied if tally.open => "**Tied** so far".to_string(),
         Outcome::Tied => "**Tied**, the vote has to be held again".to_string(),
         Outcome::Void if tally.open => "**No quorum** yet".to_string(),
@@ -287,7 +291,7 @@ fn headline(tally: &Tally) -> String {
 /// Where the weight of every organisation went: to the options still in the race, to an
 /// abstention, or nowhere when its organisation is under quorum
 fn rows(tally: &Tally, round: &Round) -> Vec<(String, f64)> {
-    let weight = |standing: &Standing| (standing.roster as f64).sqrt();
+    let weight = |standing: &Standing| (standing.size as f64).sqrt();
     let all: f64 = tally.standings.iter().map(weight).sum();
     let counting = tally.standings.iter().filter(|standing| standing.counts);
     let counted = if all > 0.0 {
@@ -304,7 +308,7 @@ fn rows(tally: &Tally, round: &Round) -> Vec<(String, f64)> {
         .collect();
     rows.push(("Abstained".to_string(), tally.abstained * counted));
     // Ballots whose every ranked option is out of the runoff
-    let exhausted = (1.0 - tally.abstained - round.total()) * counted;
+    let exhausted = (1.0 - tally.abstained - round.voted()) * counted;
     if exhausted >= 0.0005 {
         rows.push(("No option left".to_string(), exhausted));
     }
@@ -408,12 +412,15 @@ fn rounds(tally: &Tally) -> Vec<String> {
         .iter()
         .enumerate()
         .map(|(position, round)| {
-            let total = round.total();
             let scores: Vec<String> = round
                 .scores
                 .iter()
                 .map(|(number, score)| {
-                    let share = if total > 0.0 { score / total } else { 0.0 };
+                    let share = if round.total > 0.0 {
+                        score / round.total
+                    } else {
+                        0.0
+                    };
                     format!("Option {number} **{}**", percent(share))
                 })
                 .collect();
@@ -567,7 +574,8 @@ mod tests {
         assert!(overview.starts_with("**Option 2 is ahead**\nEqual shares\nOpen until <t:"));
         assert!(overview.contains("Option 2      ███░░░░░░░░░   27.5%\n"));
         assert!(overview.contains("Abstained     ██░░░░░░░░░░   19.4%\n"));
-        assert!(overview.contains("Option 2 has **100.0%** of the vote that counted"));
+        // dave's abstention is part of the vote that counted
+        assert!(overview.contains("Option 2 has **58.6%** of the vote that counted"));
         assert!(overview.ends_with("**2** needed\n**2** ballots"));
     }
 

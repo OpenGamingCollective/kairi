@@ -1,22 +1,26 @@
-//! Counts a vote the way the membership approved it: square-root proportional weighting with
-//! a dual-gate quorum, <https://lists.opengamingcollective.org/governance/2ba6fc23-d466-44ec-b472-4d558ec9797d@gmail.com/>
+//! Counts a vote the way the membership approved it, with square-root weighting and a
+//! dual-gate quorum:
+//! <https://lists.opengamingcollective.org/governance/2ba6fc23-d466-44ec-b472-4d558ec9797d@gmail.com/>
 //!
-//! - Each organisation weighs the square root of its roster, the unaffiliated members weigh
-//!   as one block. Only the members with a valid email are on a roster
-//! - Internal quorum: an organisation only counts when enough of its roster voted
-//! - Coalition quorum: the vote is void unless enough of the organisations and the block count
-//! - The weights are normalised among those that count, each shares its weight equally
-//!   between the ballots of its members
-//! - More than half of the weight that didn't abstain passes an option, rankings are counted
-//!   as an instant runoff
+//! - Each organisation's weight is the square root of its roster size. The unaffiliated vote
+//!   as one block
+//! - Internal quorum: an organisation only counts if enough of its members voted
+//! - Coalition quorum: the vote is void unless enough entities count
+//! - Weights are normalised across the entities that count, then split among their ballots
+//! - An option passes with more than half of the counted weight. Rankings go to a runoff
 //!
 //! What the approved text leaves open is decided here: the quorums come from the [`Policy`],
-//! the block of the unaffiliated has no internal quorum since it has no stance to form, and a
-//! member listed by several organisations only votes in the first of them
+//! the block of the unaffiliated has no internal quorum since it has no stance to form and
+//! weighs the square root of its members who voted rather than of all of them, so that a few
+//! voters don't carry the weight of the whole block. A member listed by several organisations
+//! only votes in the first of them. A ballot that
+//! abstains, or that only ranked options that are out of the runoff, is still part of the
+//! weight an option needs more than half of
 
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, TimeDelta, Utc};
+use serde::{Deserialize, Serialize};
 
 use crate::{
     ballot::{self, Reading, Vote},
@@ -27,6 +31,41 @@ use crate::{
 /// Scores closer than this are tied
 const EPSILON: f64 = 1e-9;
 
+/// Members the weight of the unaffiliated block is the square root of
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BlockWeight {
+    /// Only the members who voted
+    #[default]
+    Voters,
+    /// Every unaffiliated member, as the approved text reads
+    Roster,
+}
+
+/// How abstentions count
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Abstentions {
+    /// Count toward both the quorum and the majority
+    #[default]
+    Counted,
+    /// Count toward the quorum only
+    QuorumOnly,
+    /// Treated as if the member didn't vote
+    Ignored,
+}
+
+/// What happens to a ballot once all its options are eliminated
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Exhausted {
+    /// It still counts toward the majority
+    #[default]
+    Counted,
+    /// It no longer counts toward the majority
+    Dropped,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Policy {
     /// Fraction of an organisation's members who must vote for it to count (0 to 1)
@@ -35,6 +74,9 @@ pub struct Policy {
     pub coalition_quorum: f64,
     /// How long a vote stays open if its first mail doesn't say
     pub window: TimeDelta,
+    pub unaffiliated_weight: BlockWeight,
+    pub abstentions: Abstentions,
+    pub exhausted: Exhausted,
 }
 
 impl Default for Policy {
@@ -43,6 +85,9 @@ impl Default for Policy {
             internal_quorum: 0.5,
             coalition_quorum: 0.5,
             window: TimeDelta::hours(24),
+            unaffiliated_weight: BlockWeight::default(),
+            abstentions: Abstentions::default(),
+            exhausted: Exhausted::default(),
         }
     }
 }
@@ -97,8 +142,11 @@ pub struct Standing {
     pub name: String,
     pub unaffiliated: bool,
     pub roster: usize,
+    /// Members its weight is the square root of, the roster unless the [`Policy`] only weighs
+    /// the voters of the unaffiliated block
+    pub size: usize,
     pub voted: usize,
-    /// Usernames of its members who voted
+    /// Usernames of its members who voted, a member who abstains may not be one of them
     pub voters: Vec<String>,
     /// Whether it passed the internal quorum
     pub counts: bool,
@@ -106,17 +154,20 @@ pub struct Standing {
     pub weight: f64,
 }
 
-/// A round of the instant runoff, a vote between two options has a single one
+/// One round of the instant runoff
 #[derive(Debug, Clone, PartialEq)]
 pub struct Round {
-    /// Weight behind each option still in the race, in the order of the motion
+    /// Share behind each option still in the race, in motion order
     pub scores: Vec<(u32, f64)>,
     /// Out before the next round
     pub eliminated: Vec<u32>,
+    /// Weight an option needs more than half of
+    pub total: f64,
 }
 
 impl Round {
-    pub fn total(&self) -> f64 {
+    /// Weight behind the options still in the race
+    pub fn voted(&self) -> f64 {
         self.scores.iter().map(|(_, score)| score).sum()
     }
 }
@@ -124,6 +175,8 @@ impl Round {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Outcome {
     Passed(u32),
+    /// No option has more than half of the weight that counts
+    NoMajority,
     Tied,
     /// The coalition quorum wasn't met
     Void,
@@ -172,6 +225,13 @@ pub fn tally(
     let motion = Motion::read(mail, sent, policy.window)?;
     let (ballots, rejected) = collect(&motion, replies, roster);
 
+    // An ignored abstention is treated as no vote
+    let voted = |member: &String| {
+        ballots.get(member).is_some_and(|ballot| {
+            policy.abstentions != Abstentions::Ignored || ballot.vote != Vote::Abstain
+        })
+    };
+
     let entities = roster.entities();
     let mut standings: Vec<Standing> = entities
         .iter()
@@ -180,10 +240,12 @@ pub fn tally(
             let voters: Vec<String> = entity
                 .members
                 .iter()
-                .filter(|member| ballots.contains_key(*member))
+                .filter(|member| voted(member))
                 .cloned()
                 .collect();
             let voted = voters.len();
+            let voters_only =
+                entity.unaffiliated && policy.unaffiliated_weight == BlockWeight::Voters;
             let counts = voted > 0
                 && (entity.unaffiliated || voted as f64 >= policy.internal_quorum * roster as f64);
             Standing {
@@ -191,6 +253,7 @@ pub fn tally(
                 name: entity.name.clone(),
                 unaffiliated: entity.unaffiliated,
                 roster,
+                size: if voters_only { voted } else { roster },
                 voted,
                 voters,
                 counts,
@@ -202,10 +265,10 @@ pub fn tally(
     let pool: f64 = standings
         .iter()
         .filter(|standing| standing.counts)
-        .map(|standing| (standing.roster as f64).sqrt())
+        .map(|standing| (standing.size as f64).sqrt())
         .sum();
     for standing in standings.iter_mut().filter(|standing| standing.counts) {
-        standing.weight = (standing.roster as f64).sqrt() / pool;
+        standing.weight = (standing.size as f64).sqrt() / pool;
     }
 
     let counting = standings.iter().filter(|standing| standing.counts).count();
@@ -214,15 +277,12 @@ pub fn tally(
 
     // Each ballot carries its share of the weight of each entity its member votes in
     let mut shares: BTreeMap<&str, f64> = BTreeMap::new();
-    for (entity, standing) in entities.iter().zip(&standings) {
+    for standing in &standings {
         if !standing.counts {
             continue;
         }
-        for member in &entity.members {
-            if ballots.contains_key(member) {
-                *shares.entry(member.as_str()).or_default() +=
-                    standing.weight / standing.voted as f64;
-            }
+        for member in &standing.voters {
+            *shares.entry(member.as_str()).or_default() += standing.weight / standing.voted as f64;
         }
     }
 
@@ -239,7 +299,11 @@ pub fn tally(
     let (rounds, outcome) = if void {
         (Vec::new(), Outcome::Void)
     } else {
-        runoff(&options, &ranked)
+        let abstained = match policy.abstentions {
+            Abstentions::Counted => abstained,
+            Abstentions::QuorumOnly | Abstentions::Ignored => 0.0,
+        };
+        runoff(&options, &ranked, abstained, policy.exhausted)
     };
 
     let mut ballots: Vec<Ballot> = ballots
@@ -336,15 +400,22 @@ fn collect(
     (ballots, rejected)
 }
 
-/// Drop the weakest options until one holds more than half of the weight still in the race
-fn runoff(options: &[u32], ballots: &[(&[u32], f64)]) -> (Vec<Round>, Outcome) {
+/// Eliminate the weakest options until one has more than half of the counted weight,
+/// including `abstained`
+fn runoff(
+    options: &[u32],
+    ballots: &[(&[u32], f64)],
+    abstained: f64,
+    exhausted: Exhausted,
+) -> (Vec<Round>, Outcome) {
     let mut running: Vec<u32> = options.to_vec();
     let mut rounds = Vec::new();
+    let ranked: f64 = ballots.iter().map(|(_, share)| share).sum();
 
     loop {
         let mut scores: Vec<(u32, f64)> = running.iter().map(|option| (*option, 0.0)).collect();
         for (ranking, share) in ballots {
-            // Ballots that only ranked eliminated options leave the race
+            // Every option on this ballot is out
             let Some(choice) = ranking.iter().find(|option| running.contains(option)) else {
                 continue;
             };
@@ -353,15 +424,25 @@ fn runoff(options: &[u32], ballots: &[(&[u32], f64)]) -> (Vec<Round>, Outcome) {
             }
         }
 
-        let total: f64 = scores.iter().map(|(_, score)| score).sum();
-        let lowest = scores
-            .iter()
-            .map(|(_, score)| *score)
-            .fold(f64::MAX, f64::min);
+        let voted: f64 = scores.iter().map(|(_, score)| score).sum();
+        let total = abstained
+            + match exhausted {
+                Exhausted::Counted => ranked,
+                Exhausted::Dropped => voted,
+            };
         let winner = scores
             .iter()
             .find(|(_, score)| *score > total / 2.0 + EPSILON)
             .map(|(option, _)| *option);
+        // The last remaining option only gets a round if it passes
+        if winner.is_none() && scores.len() == 1 && !rounds.is_empty() {
+            return (rounds, Outcome::NoMajority);
+        }
+
+        let lowest = scores
+            .iter()
+            .map(|(_, score)| *score)
+            .fold(f64::MAX, f64::min);
         // Options tied for last are eliminated together
         let eliminated: Vec<u32> = scores
             .iter()
@@ -377,12 +458,13 @@ fn runoff(options: &[u32], ballots: &[(&[u32], f64)]) -> (Vec<Round>, Outcome) {
             } else {
                 eliminated.clone()
             },
+            total,
         });
 
         if let Some(winner) = winner {
             return (rounds, Outcome::Passed(winner));
         }
-        if total <= EPSILON {
+        if voted <= EPSILON {
             return (rounds, Outcome::NoVotes);
         }
         if stuck {
@@ -465,7 +547,7 @@ mod tests {
             .iter()
             .find(|(number, _)| *number == option)
             .unwrap();
-        score / round.total()
+        *score
     }
 
     fn close(a: f64, b: f64) -> bool {
@@ -489,16 +571,14 @@ mod tests {
             ("free1", "Option 2"),
         ]));
 
-        // big 2, duo √2, unaffiliated √3. solo also lists big1, who only votes in big
-        let pool = 2.0 + 2f64.sqrt() + 3f64.sqrt();
+        // big 2, duo √2, unaffiliated 1 for its only voter. solo also lists big1, but big1 only
+        // votes in big
+        let pool = 2.0 + 2f64.sqrt() + 1.0;
         assert!(close(standing(&tally, "big").weight, 2.0 / pool));
         assert!(close(standing(&tally, "duo").weight, 2f64.sqrt() / pool));
         let solo = standing(&tally, "solo");
         assert_eq!((solo.roster, solo.voted, solo.counts), (1, 0, false));
-        assert!(close(
-            standing(&tally, UNAFFILIATED).weight,
-            3f64.sqrt() / pool
-        ));
+        assert!(close(standing(&tally, UNAFFILIATED).weight, 1.0 / pool));
         // mute can't vote, so the block only counts the three who can
         assert_eq!(standing(&tally, UNAFFILIATED).roster, 3);
 
@@ -578,24 +658,64 @@ mod tests {
     }
 
     #[test]
-    fn abstentions_count_for_the_quorum_only() {
+    fn abstentions_are_part_of_the_majority() {
+        // duo √2: half abstains, half to 1. unaffiliated 1 abstains
         let tally = count(&votes(&[
             ("duo1", "Abstain"),
             ("duo2", "Option 1"),
             ("free1", "abstain"),
         ]));
         assert!(standing(&tally, "duo").counts);
-        assert_eq!(tally.outcome, Outcome::Passed(1));
-        assert!(close(score(&tally, 0, 1), 1.0));
+        let pool = 2f64.sqrt() + 1.0;
+        assert!(close(score(&tally, 0, 1), 2f64.sqrt() / 2.0 / pool));
+        assert!(close(tally.abstained, (2f64.sqrt() / 2.0 + 1.0) / pool));
+        // The only option anyone voted for falls short of half
+        assert_eq!(tally.outcome, Outcome::NoMajority);
+        assert_eq!(tally.rounds.len(), 1);
+        assert_eq!(tally.rounds[0].eliminated, [2]);
 
-        let pool = 2f64.sqrt() + 3f64.sqrt();
-        assert!(close(
-            tally.abstained,
-            (2f64.sqrt() / 2.0 + 3f64.sqrt()) / pool
-        ));
+        // big 2 to 1, duo √2 abstains
+        let tally = count(&votes(&[
+            ("big1", "Option 1"),
+            ("big2", "Option 1"),
+            ("duo1", "Abstain"),
+        ]));
+        assert!(close(score(&tally, 0, 1), 2.0 / (2.0 + 2f64.sqrt())));
+        assert_eq!(tally.outcome, Outcome::Passed(1));
 
         let tally = count(&votes(&[("duo1", "Abstain"), ("free1", "Abstain")]));
         assert_eq!(tally.outcome, Outcome::NoVotes);
+    }
+
+    #[test]
+    fn the_ballots_of_an_option_that_is_out_can_pass_the_other() {
+        // big 2 and solo 1 to 1, duo √2 to 2 then 1, unaffiliated √3 abstains
+        let replies = |duo: &str| {
+            votes(&[
+                ("big1", "Option 1"),
+                ("big2", "Option 1"),
+                ("solo1", "Option 1"),
+                ("duo1", duo),
+                ("duo2", duo),
+                ("free1", "Abstain"),
+                ("free2", "Abstain"),
+                ("free3", "Abstain"),
+            ])
+        };
+
+        // 1 has 3 of 3 + √2 + √3, short of half until it picks up the ballots of 2
+        let pool = 3.0 + 2f64.sqrt() + 3f64.sqrt();
+        let tally = count(&replies("Option 2 > Option 1"));
+        assert_eq!(tally.rounds.len(), 2);
+        assert_eq!(tally.rounds[0].eliminated, [2]);
+        assert!(close(score(&tally, 1, 1), (3.0 + 2f64.sqrt()) / pool));
+        assert_eq!(tally.outcome, Outcome::Passed(1));
+
+        // Nobody who voted for 2 ranked 1
+        let tally = count(&replies("Option 2"));
+        assert_eq!(tally.rounds.len(), 1);
+        assert!(close(score(&tally, 0, 1), 3.0 / pool));
+        assert_eq!(tally.outcome, Outcome::NoMajority);
     }
 
     #[test]
@@ -704,21 +824,21 @@ mod tests {
             &Policy::default(),
         );
 
-        // duo √2: half to 1, half to 3. unaffiliated √3 to 2. solo 1 to 3
+        // duo √2: half to 1, half to 3. unaffiliated √2 to 2. solo 1 to 3
         assert_eq!(tally.rounds.len(), 2);
         assert_eq!(tally.rounds[0].eliminated, [1]);
         assert_eq!(tally.rounds[1].scores.len(), 2);
         // duo1's ballot moves to option 2
-        let pool = 2f64.sqrt() + 3f64.sqrt() + 1.0;
+        let pool = 2f64.sqrt() + 2f64.sqrt() + 1.0;
         assert!(close(
             score(&tally, 1, 2),
-            (3f64.sqrt() + 2f64.sqrt() / 2.0) / pool
+            (2f64.sqrt() + 2f64.sqrt() / 2.0) / pool
         ));
         assert_eq!(tally.outcome, Outcome::Passed(2));
     }
 
     #[test]
-    fn ballots_out_of_options_leave_the_runoff() {
+    fn ballots_out_of_options_are_part_of_the_majority() {
         let tally = count_with(
             THREE,
             &votes(&[
@@ -731,14 +851,87 @@ mod tests {
             &Policy::default(),
         );
 
-        // 1: √2/2, 2: √2/2 + √3/2, 3: √3/2 + 1, nobody has half of √2 + √3 + 1
+        // unaffiliated √2 for its two voters. 1: √2/2, 2: √2/2 + √2/2, 3: √2/2 + 1, nobody has
+        // half of √2 + √2 + 1
         assert_eq!(tally.rounds[0].eliminated, [1]);
-        // duo1 only ranked option 1, the race goes on without them
-        let pool = 2f64.sqrt() + 3f64.sqrt() + 1.0;
+        // duo1 only ranked option 1. Their weight backs no option but still has to be beaten
+        let pool = 2f64.sqrt() + 2f64.sqrt() + 1.0;
         assert!(close(
-            tally.rounds[1].total(),
+            tally.rounds[1].voted(),
             1.0 - 2f64.sqrt() / 2.0 / pool
         ));
+        // 3 leads with √2/2 + 1, which is short of half, and nobody who voted for 2 ranked it
+        assert_eq!(tally.rounds.len(), 2);
+        assert_eq!(tally.rounds[1].eliminated, [2]);
+        assert_eq!(tally.outcome, Outcome::NoMajority);
+    }
+
+    #[test]
+    fn the_policy_decides_what_the_approved_text_leaves_open() {
+        // The whole block behind its only voter
+        let whole = Policy {
+            unaffiliated_weight: BlockWeight::Roster,
+            ..Policy::default()
+        };
+        let tally = count_with(
+            MAIL,
+            &votes(&[("duo1", "Option 1"), ("free1", "Option 2")]),
+            &whole,
+        );
+        let pool = 2f64.sqrt() + 3f64.sqrt();
+        assert!(close(
+            standing(&tally, UNAFFILIATED).weight,
+            3f64.sqrt() / pool
+        ));
+        assert_eq!(tally.outcome, Outcome::Passed(2));
+
+        // duo √2: half abstains, half to 1. unaffiliated 1 abstains
+        let abstaining = votes(&[
+            ("duo1", "Abstain"),
+            ("duo2", "Option 1"),
+            ("free1", "Abstain"),
+        ]);
+        let quorum_only = Policy {
+            abstentions: Abstentions::QuorumOnly,
+            ..Policy::default()
+        };
+        let tally = count_with(MAIL, &abstaining, &quorum_only);
+        assert!(close(tally.rounds[0].total, score(&tally, 0, 1)));
+        assert_eq!(tally.outcome, Outcome::Passed(1));
+
+        // Only duo2 voted, so the block doesn't count
+        let ignored = Policy {
+            abstentions: Abstentions::Ignored,
+            coalition_quorum: 0.25,
+            ..Policy::default()
+        };
+        let tally = count_with(MAIL, &abstaining, &ignored);
+        assert_eq!(standing(&tally, "duo").voted, 1);
+        assert!(!standing(&tally, UNAFFILIATED).counts);
+        assert_eq!(tally.abstained, 0.0);
+        assert_eq!(tally.outcome, Outcome::Passed(1));
+        assert_eq!(
+            count_with(MAIL, &abstaining, &Policy::default()).outcome,
+            Outcome::NoMajority
+        );
+
+        // duo1 only ranked option 1, which is out, so 3 has more than half of what's left
+        let dropped = Policy {
+            exhausted: Exhausted::Dropped,
+            ..Policy::default()
+        };
+        let tally = count_with(
+            THREE,
+            &votes(&[
+                ("duo1", "Option 1"),
+                ("duo2", "Option 2"),
+                ("free1", "Option 3 > Option 1"),
+                ("free2", "Option 2"),
+                ("solo1", "Option 3"),
+            ]),
+            &dropped,
+        );
+        assert!(close(tally.rounds[1].total, tally.rounds[1].voted()));
         assert_eq!(tally.outcome, Outcome::Passed(3));
     }
 
