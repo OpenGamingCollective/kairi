@@ -11,3 +11,5 @@ repository.workspace = true
 serde.workspace = true
 toml.workspace = true
 anyhow.workspace = true
+
+voting = { path = "../voting" }

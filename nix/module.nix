@@ -25,6 +25,9 @@
           internal_quorum = cfg.settings.voting.internalQuorum;
           coalition_quorum = cfg.settings.voting.coalitionQuorum;
           window_hours = cfg.settings.voting.windowHours;
+          unaffiliated_weight = cfg.settings.voting.unaffiliatedWeight;
+          abstentions = cfg.settings.voting.abstentions;
+          exhausted_ballots = cfg.settings.voting.exhaustedBallots;
         };
       };
 
@@ -150,6 +153,37 @@
                       type = lib.types.ints.positive;
                       default = 24;
                       description = "How long a vote lasts when its first mail doesn't say";
+                    };
+                    unaffiliatedWeight = lib.mkOption {
+                      type = lib.types.enum [
+                        "voters"
+                        "roster"
+                      ];
+                      default = "voters";
+                      description = "Members the weight of the unaffiliated block is the square root of";
+                    };
+                    abstentions = lib.mkOption {
+                      type = lib.types.enum [
+                        "counted"
+                        "quorum_only"
+                        "ignored"
+                      ];
+                      default = "counted";
+                      description = ''
+                        Whether the weight of a member who abstains is part of what an option needs
+                        more than half of, only counts for the quorum, or is ignored
+                      '';
+                    };
+                    exhaustedBallots = lib.mkOption {
+                      type = lib.types.enum [
+                        "counted"
+                        "dropped"
+                      ];
+                      default = "counted";
+                      description = ''
+                        Whether a ballot stays part of what an option needs more than half of once
+                        every option it ranked is out of the runoff
+                      '';
                     };
                   };
                 };

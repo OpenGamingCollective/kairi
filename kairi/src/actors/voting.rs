@@ -137,7 +137,9 @@ impl Message<CountVotes> for Voting {
             internal_quorum: self.config.internal_quorum,
             coalition_quorum: self.config.coalition_quorum,
             window: TimeDelta::hours(self.config.window_hours.into()),
-            ..Policy::default()
+            unaffiliated_weight: self.config.unaffiliated_weight,
+            abstentions: self.config.abstentions,
+            exhausted: self.config.exhausted_ballots,
         };
         let tally = voting::tally(
             &motion.body,

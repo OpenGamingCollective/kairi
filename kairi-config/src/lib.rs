@@ -2,6 +2,7 @@ use std::{fs, path::PathBuf};
 
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
+use voting::{Abstentions, BlockWeight, Exhausted};
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ConfigFile {
@@ -25,6 +26,12 @@ pub struct VotingConfigFile {
     pub coalition_quorum: f64,
     /// How long a vote stays open if its first mail doesn't say
     pub window_hours: u32,
+    /// Members the weight of the unaffiliated block is the square root of, `voters` or `roster`
+    pub unaffiliated_weight: BlockWeight,
+    /// How abstentions are treated: `counted`, `quorum_only` or `ignored`
+    pub abstentions: Abstentions,
+    /// What happens to ballots whose options were all eliminated: `counted` or `dropped`
+    pub exhausted_ballots: Exhausted,
 }
 
 impl Default for VotingConfigFile {
@@ -34,6 +41,9 @@ impl Default for VotingConfigFile {
             internal_quorum: 0.5,
             coalition_quorum: 0.5,
             window_hours: 24,
+            unaffiliated_weight: BlockWeight::default(),
+            abstentions: Abstentions::default(),
+            exhausted_ballots: Exhausted::default(),
         }
     }
 }
@@ -84,6 +94,9 @@ pub struct VotingConfig {
     pub internal_quorum: f64,
     pub coalition_quorum: f64,
     pub window_hours: u32,
+    pub unaffiliated_weight: BlockWeight,
+    pub abstentions: Abstentions,
+    pub exhausted_ballots: Exhausted,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize, Clone)]
@@ -162,6 +175,9 @@ impl Config {
                 internal_quorum: voting.internal_quorum,
                 coalition_quorum: voting.coalition_quorum,
                 window_hours: voting.window_hours,
+                unaffiliated_weight: voting.unaffiliated_weight,
+                abstentions: voting.abstentions,
+                exhausted_ballots: voting.exhausted_ballots,
             },
         })
     }
@@ -195,6 +211,22 @@ mod tests {
         );
         assert_eq!(voting.internal_quorum, 0.25);
         assert_eq!(voting.coalition_quorum, 0.5);
+        assert_eq!(voting.abstentions, Abstentions::Counted);
+    }
+
+    #[test]
+    fn voting_rules_are_read() {
+        let config = format!(
+            "{MINIMAL}[voting]\nunaffiliated_weight = \"roster\"\nabstentions = \"quorum_only\"\n\
+             exhausted_ballots = \"dropped\"\n"
+        );
+        let voting = Config::build(&config).unwrap().voting;
+        assert_eq!(voting.unaffiliated_weight, BlockWeight::Roster);
+        assert_eq!(voting.abstentions, Abstentions::QuorumOnly);
+        assert_eq!(voting.exhausted_ballots, Exhausted::Dropped);
+
+        let config = format!("{MINIMAL}[voting]\nabstentions = \"sometimes\"\n");
+        assert!(Config::build(&config).is_err());
     }
 
     #[test]
