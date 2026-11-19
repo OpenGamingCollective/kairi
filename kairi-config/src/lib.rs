@@ -2,7 +2,7 @@ use std::{fs, path::PathBuf};
 
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
-use voting::{Abstentions, BlockWeight, Exhausted};
+use voting::{Abstentions, BlockWeight, Exhausted, LastTwo};
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ConfigFile {
@@ -32,6 +32,10 @@ pub struct VotingConfigFile {
     pub abstentions: Abstentions,
     /// What happens to ballots whose options were all eliminated: `counted` or `dropped`
     pub exhausted_ballots: Exhausted,
+    /// What to do when two options are left and neither has a majority: `runoff` or `final`
+    pub last_two_options: LastTwo,
+    /// Lets `/voteconfig` change the rules until the next restart. Meant for test bots
+    pub rule_changes: bool,
 }
 
 impl Default for VotingConfigFile {
@@ -44,6 +48,8 @@ impl Default for VotingConfigFile {
             unaffiliated_weight: BlockWeight::default(),
             abstentions: Abstentions::default(),
             exhausted_ballots: Exhausted::default(),
+            last_two_options: LastTwo::default(),
+            rule_changes: false,
         }
     }
 }
@@ -97,6 +103,9 @@ pub struct VotingConfig {
     pub unaffiliated_weight: BlockWeight,
     pub abstentions: Abstentions,
     pub exhausted_ballots: Exhausted,
+    pub last_two_options: LastTwo,
+    /// Lets `/voteconfig` change the rules until the bot restarts
+    pub rule_changes: bool,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize, Clone)]
@@ -178,6 +187,8 @@ impl Config {
                 unaffiliated_weight: voting.unaffiliated_weight,
                 abstentions: voting.abstentions,
                 exhausted_ballots: voting.exhausted_ballots,
+                last_two_options: voting.last_two_options,
+                rule_changes: voting.rule_changes,
             },
         })
     }
@@ -212,18 +223,21 @@ mod tests {
         assert_eq!(voting.internal_quorum, 0.25);
         assert_eq!(voting.coalition_quorum, 0.5);
         assert_eq!(voting.abstentions, Abstentions::Counted);
+        assert!(!voting.rule_changes);
     }
 
     #[test]
     fn voting_rules_are_read() {
         let config = format!(
             "{MINIMAL}[voting]\nunaffiliated_weight = \"roster\"\nabstentions = \"quorum_only\"\n\
-             exhausted_ballots = \"dropped\"\n"
+             exhausted_ballots = \"dropped\"\nlast_two_options = \"final\"\nrule_changes = true\n"
         );
         let voting = Config::build(&config).unwrap().voting;
         assert_eq!(voting.unaffiliated_weight, BlockWeight::Roster);
         assert_eq!(voting.abstentions, Abstentions::QuorumOnly);
         assert_eq!(voting.exhausted_ballots, Exhausted::Dropped);
+        assert_eq!(voting.last_two_options, LastTwo::Final);
+        assert!(voting.rule_changes);
 
         let config = format!("{MINIMAL}[voting]\nabstentions = \"sometimes\"\n");
         assert!(Config::build(&config).is_err());

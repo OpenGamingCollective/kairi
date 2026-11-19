@@ -28,6 +28,8 @@
           unaffiliated_weight = cfg.settings.voting.unaffiliatedWeight;
           abstentions = cfg.settings.voting.abstentions;
           exhausted_ballots = cfg.settings.voting.exhaustedBallots;
+          last_two_options = cfg.settings.voting.lastTwoOptions;
+          rule_changes = cfg.settings.voting.ruleChanges;
         };
       };
 
@@ -183,6 +185,25 @@
                       description = ''
                         Whether a ballot stays part of what an option needs more than half of once
                         every option it ranked is out of the runoff
+                      '';
+                    };
+                    lastTwoOptions = lib.mkOption {
+                      type = lib.types.enum [
+                        "runoff"
+                        "final"
+                      ];
+                      default = "runoff";
+                      description = ''
+                        Whether the weaker of the last two options of a runoff is still eliminated,
+                        its ballots passing the other, or the count stops there without a majority
+                      '';
+                    };
+                    ruleChanges = lib.mkOption {
+                      type = lib.types.bool;
+                      default = false;
+                      description = ''
+                        Whether `/voteconfig` can change the voting rules until the bot restarts, for
+                        a test bot. It only shows them otherwise
                       '';
                     };
                   };
