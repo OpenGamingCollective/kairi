@@ -15,7 +15,8 @@
 //! voters don't carry the weight of the whole block. A member listed by several organisations
 //! only votes in the first of them. A ballot that
 //! abstains, or that only ranked options that are out of the runoff, is still part of the
-//! weight an option needs more than half of
+//! weight an option needs more than half of. Once two options are left, the weaker one is still
+//! eliminated and its ballots can pass the other, unless the [`Policy`] says the count stops there
 
 use std::collections::BTreeMap;
 
@@ -66,6 +67,17 @@ pub enum Exhausted {
     Dropped,
 }
 
+/// What to do with two options left and no majority
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LastTwo {
+    /// Eliminate the weaker one and move its ballots to the other
+    #[default]
+    Runoff,
+    /// Stop there, with no majority
+    Final,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Policy {
     /// Fraction of an organisation's members who must vote for it to count (0 to 1)
@@ -77,6 +89,7 @@ pub struct Policy {
     pub unaffiliated_weight: BlockWeight,
     pub abstentions: Abstentions,
     pub exhausted: Exhausted,
+    pub last_two: LastTwo,
 }
 
 impl Default for Policy {
@@ -88,6 +101,7 @@ impl Default for Policy {
             unaffiliated_weight: BlockWeight::default(),
             abstentions: Abstentions::default(),
             exhausted: Exhausted::default(),
+            last_two: LastTwo::default(),
         }
     }
 }
@@ -303,7 +317,13 @@ pub fn tally(
             Abstentions::Counted => abstained,
             Abstentions::QuorumOnly | Abstentions::Ignored => 0.0,
         };
-        runoff(&options, &ranked, abstained, policy.exhausted)
+        runoff(
+            &options,
+            &ranked,
+            abstained,
+            policy.exhausted,
+            policy.last_two,
+        )
     };
 
     let mut ballots: Vec<Ballot> = ballots
@@ -407,6 +427,7 @@ fn runoff(
     ballots: &[(&[u32], f64)],
     abstained: f64,
     exhausted: Exhausted,
+    last_two: LastTwo,
 ) -> (Vec<Round>, Outcome) {
     let mut running: Vec<u32> = options.to_vec();
     let mut rounds = Vec::new();
@@ -451,9 +472,11 @@ fn runoff(
             .collect();
 
         let stuck = eliminated.len() == scores.len();
+        // `LastTwo::Final` stops without eliminating
+        let last = last_two == LastTwo::Final && winner.is_none() && scores.len() <= 2;
         rounds.push(Round {
             scores,
-            eliminated: if stuck {
+            eliminated: if stuck || last {
                 Vec::new()
             } else {
                 eliminated.clone()
@@ -469,6 +492,9 @@ fn runoff(
         }
         if stuck {
             return (rounds, Outcome::Tied);
+        }
+        if last {
+            return (rounds, Outcome::NoMajority);
         }
         running.retain(|option| !eliminated.contains(option));
     }
@@ -933,6 +959,26 @@ mod tests {
         );
         assert!(close(tally.rounds[1].total, tally.rounds[1].voted()));
         assert_eq!(tally.outcome, Outcome::Passed(3));
+
+        // duo √2 to 1, unaffiliated 1 to 3 then 1, solo 1 abstains. 1 only gets past half once
+        // it picks up the ballot of 3, the last option it beat
+        let two_left = votes(&[
+            ("duo1", "Option 1"),
+            ("duo2", "Option 1"),
+            ("free1", "Option 3 > Option 1"),
+            ("solo1", "Abstain"),
+        ]);
+        let tally = count_with(THREE, &two_left, &Policy::default());
+        assert_eq!(tally.rounds.len(), 3);
+        assert_eq!(tally.outcome, Outcome::Passed(1));
+        let last_two_final = Policy {
+            last_two: LastTwo::Final,
+            ..Policy::default()
+        };
+        let tally = count_with(THREE, &two_left, &last_two_final);
+        assert_eq!(tally.rounds.len(), 2);
+        assert!(tally.rounds[1].eliminated.is_empty());
+        assert_eq!(tally.outcome, Outcome::NoMajority);
     }
 
     #[test]
@@ -948,6 +994,206 @@ mod tests {
         );
         assert_eq!(tally.rounds[0].eliminated, [1, 2]);
         assert_eq!(tally.outcome, Outcome::Passed(3));
+    }
+
+    /// Ballots for the rule tests: big 2 for 1 then 2, duo √2 for 2 then 1, solo 1 for 3 only,
+    /// and two of the unaffiliated abstain
+    fn contested() -> Vec<Reply> {
+        votes(&[
+            ("big1", "Option 1 > Option 2"),
+            ("big2", "Option 1 > Option 2"),
+            ("duo1", "Option 2 > Option 1"),
+            ("duo2", "Option 2 > Option 1"),
+            ("solo1", "Option 3"),
+            ("free1", "Abstain"),
+            ("free2", "Abstain"),
+        ])
+    }
+
+    #[test]
+    fn every_combination_of_the_rules_counts_as_it_says() {
+        use Abstentions as A;
+        use Exhausted as E;
+        use LastTwo as L;
+
+        let (big, duo, solo) = (2.0, 2f64.sqrt(), 1.0);
+        // The unaffiliated weigh √2 for their two voters, or nothing when abstentions are
+        // ignored, since then none of them voted
+        let pool = |abstentions: A| match abstentions {
+            A::Ignored => big + duo + solo,
+            A::Counted | A::QuorumOnly => big + duo + solo + 2f64.sqrt(),
+        };
+        // What option 1 needs more than half of in the last round
+        let total = |abstentions: A, exhausted: E, rounds: usize| {
+            let abstained = match abstentions {
+                A::Counted => 2f64.sqrt(),
+                A::QuorumOnly | A::Ignored => 0.0,
+            };
+            // solo's ballot has no option left from the second round on
+            let left = match (exhausted, rounds) {
+                (E::Dropped, 2..) => big + duo,
+                _ => big + duo + solo,
+            };
+            abstained + left
+        };
+
+        // Option 3 always goes out first. Then option 1 has 2 against √2, which is more than
+        // half only when neither the abstentions nor solo's ballot are counted. If the runoff
+        // goes on, it also picks up the ballots of option 2
+        let passes_in = |rounds: usize| (Outcome::Passed(1), rounds);
+        let no_majority = (Outcome::NoMajority, 2);
+        let cases = [
+            (A::Counted, E::Counted, L::Runoff, passes_in(3)),
+            (A::Counted, E::Counted, L::Final, no_majority),
+            (A::Counted, E::Dropped, L::Runoff, passes_in(3)),
+            (A::Counted, E::Dropped, L::Final, no_majority),
+            (A::QuorumOnly, E::Counted, L::Runoff, passes_in(3)),
+            (A::QuorumOnly, E::Counted, L::Final, no_majority),
+            (A::QuorumOnly, E::Dropped, L::Runoff, passes_in(2)),
+            (A::QuorumOnly, E::Dropped, L::Final, passes_in(2)),
+            (A::Ignored, E::Counted, L::Runoff, passes_in(3)),
+            (A::Ignored, E::Counted, L::Final, no_majority),
+            (A::Ignored, E::Dropped, L::Runoff, passes_in(2)),
+            (A::Ignored, E::Dropped, L::Final, passes_in(2)),
+        ];
+
+        for (abstentions, exhausted, last_two, (outcome, rounds)) in cases {
+            let policy = Policy {
+                abstentions,
+                exhausted,
+                last_two,
+                ..Policy::default()
+            };
+            let rules = format!("{abstentions:?}, {exhausted:?}, {last_two:?}");
+            let tally = count_with(THREE, &contested(), &policy);
+            let pool = pool(abstentions);
+
+            assert_eq!(tally.outcome, outcome, "{rules}");
+            assert_eq!(tally.rounds.len(), rounds, "{rules}");
+            assert_eq!(tally.rounds[0].eliminated, [3], "{rules}");
+            assert_eq!(
+                standing(&tally, UNAFFILIATED).counts,
+                abstentions != A::Ignored,
+                "{rules}"
+            );
+            // The first round is the same whatever the rules: 2, √2 and 1 of the pool
+            assert!(close(score(&tally, 0, 1), big / pool), "{rules}");
+            assert!(close(score(&tally, 0, 2), duo / pool), "{rules}");
+            assert!(close(score(&tally, 0, 3), solo / pool), "{rules}");
+
+            let last = &tally.rounds[rounds - 1];
+            assert!(
+                close(last.total, total(abstentions, exhausted, rounds) / pool),
+                "{rules}"
+            );
+            // Option 1 ends with its own weight, plus option 2's after a third round
+            let behind = if rounds == 3 { big + duo } else { big };
+            assert!(
+                close(score(&tally, rounds - 1, 1), behind / pool),
+                "{rules}"
+            );
+            // It passes exactly when that's more than half of the total
+            let majority = score(&tally, rounds - 1, 1) > last.total / 2.0;
+            assert_eq!(majority, outcome == Outcome::Passed(1), "{rules}");
+            if outcome == Outcome::NoMajority {
+                // Both options are still in, and nothing moved to option 1
+                assert!(last.eliminated.is_empty(), "{rules}");
+                assert!(close(score(&tally, 1, 2), duo / pool), "{rules}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_last_two_options_tie_whatever_the_rule() {
+        // big 2 split between 1 and 2, duo √2 split between 1 and 2, solo 1 for 3 alone
+        let replies = votes(&[
+            ("big1", "Option 1"),
+            ("big2", "Option 2"),
+            ("duo1", "Option 1"),
+            ("duo2", "Option 2"),
+            ("solo1", "Option 3 > Option 1 > Option 2"),
+            ("free1", "Option 3 > Option 2 > Option 1"),
+        ]);
+        for last_two in [LastTwo::Runoff, LastTwo::Final] {
+            let policy = Policy {
+                last_two,
+                ..Policy::default()
+            };
+            let tally = count_with(THREE, &replies, &policy);
+            // 3 leads with 2 of 2 + √2 + 2. 1 and 2 are tied for last and go out together
+            assert_eq!(tally.rounds[0].eliminated, [1, 2], "{last_two:?}");
+        }
+
+        // Two options with the same weight behind each
+        let replies = votes(&[("duo1", "Option 1"), ("duo2", "Option 2")]);
+        for last_two in [LastTwo::Runoff, LastTwo::Final] {
+            let policy = Policy {
+                last_two,
+                coalition_quorum: 0.25,
+                ..Policy::default()
+            };
+            let tally = count_with(MAIL, &replies, &policy);
+            assert_eq!(tally.outcome, Outcome::Tied, "{last_two:?}");
+            assert_eq!(tally.rounds.len(), 1, "{last_two:?}");
+        }
+    }
+
+    #[test]
+    fn the_weight_of_the_unaffiliated_follows_the_rule() {
+        // big 2 for 1, one of the three unaffiliated for 2
+        let replies = votes(&[
+            ("big1", "Option 1"),
+            ("big2", "Option 1"),
+            ("free1", "Option 2"),
+        ]);
+        for (unaffiliated_weight, block) in [
+            (BlockWeight::Voters, 1.0),
+            (BlockWeight::Roster, 3f64.sqrt()),
+        ] {
+            let policy = Policy {
+                unaffiliated_weight,
+                ..Policy::default()
+            };
+            let tally = count_with(MAIL, &replies, &policy);
+            let rules = format!("{unaffiliated_weight:?}");
+            assert!(
+                close(standing(&tally, UNAFFILIATED).weight, block / (2.0 + block)),
+                "{rules}"
+            );
+            assert!(close(score(&tally, 0, 1), 2.0 / (2.0 + block)), "{rules}");
+            assert_eq!(tally.outcome, Outcome::Passed(1), "{rules}");
+        }
+    }
+
+    #[test]
+    fn the_quorums_follow_the_rules() {
+        // One of big's four members, and both of duo's
+        let replies = votes(&[
+            ("big1", "Option 1"),
+            ("duo1", "Option 2"),
+            ("duo2", "Option 2"),
+        ]);
+        // (internal, coalition, big counts, outcome), with four entities: big, duo, solo and
+        // the unaffiliated
+        let cases = [
+            // big is under half of its roster, and duo alone is only a quarter of the entities
+            (0.5, 0.5, false, Outcome::Void),
+            (0.5, 0.25, false, Outcome::Passed(2)),
+            // A quarter of its roster is enough for big, and 2 beats √2
+            (0.25, 0.5, true, Outcome::Passed(1)),
+            (0.25, 0.75, true, Outcome::Void),
+        ];
+        for (internal_quorum, coalition_quorum, counts, outcome) in cases {
+            let policy = Policy {
+                internal_quorum,
+                coalition_quorum,
+                ..Policy::default()
+            };
+            let rules = format!("internal {internal_quorum}, coalition {coalition_quorum}");
+            let tally = count_with(MAIL, &replies, &policy);
+            assert_eq!(standing(&tally, "big").counts, counts, "{rules}");
+            assert_eq!(tally.outcome, outcome, "{rules}");
+        }
     }
 
     #[test]
