@@ -242,18 +242,20 @@ fn overview(tally: &Tally) -> String {
     let needed = (tally.coalition_quorum * entities as f64 - 1e-9)
         .ceil()
         .max(0.0) as usize;
+    // For auditing: counted ballots, abstentions, then the rest (under quorum or rejected)
+    let counted = |abstains: bool| {
+        let is = |ballot: &&Ballot| ballot.counted && (ballot.vote == Vote::Abstain) == abstains;
+        tally.ballots.iter().filter(is).count()
+    };
+    let (valid, abstained) = (counted(false), counted(true));
+    let left_out = tally.ballots.len() - valid - abstained + tally.rejected.len();
     let _ = write!(
         text,
-        "Quorum: **{}** of **{entities}** organisations, **{needed}** needed\n**{}** {}",
+        "Quorum: **{}** of **{entities}** organisations, **{needed}** needed\n\
+         **{valid}** valid {}, **{abstained}** abstained, **{left_out}** not counted",
         tally.counting(),
-        tally.ballots.len(),
-        plural(tally.ballots.len(), "ballot", "ballots"),
+        plural(valid, "vote", "votes"),
     );
-    if !tally.rejected.is_empty() {
-        let rejected = tally.rejected.len();
-        let replies = plural(rejected, "reply", "replies");
-        let _ = write!(text, ", **{rejected}** {replies} not counted");
-    }
     text
 }
 
@@ -295,6 +297,18 @@ fn headline(tally: &Tally) -> String {
 ///
 /// `round` is the final round. Options eliminated earlier show the round they went out in
 fn rows(tally: &Tally, round: &Round) -> Vec<(String, Row)> {
+    // The abstentions that are part of what an option needs more than half of
+    let abstained = tally
+        .rounds
+        .first()
+        .map_or(0.0, |round| round.total - round.voted());
+    let share = |weight: f64| {
+        if round.total > 0.0 {
+            weight / round.total
+        } else {
+            0.0
+        }
+    };
     let mut rows: Vec<(String, Row)> = tally
         .motion
         .options
@@ -305,7 +319,7 @@ fn rows(tally: &Tally, round: &Round) -> Vec<(String, Row)> {
                 .iter()
                 .find(|(number, _)| *number == option.number);
             let row = match score {
-                Some((_, score)) => Row::Share(*score),
+                Some((_, score)) => Row::Share(share(*score)),
                 None => {
                     let out = |round: &Round| round.eliminated.contains(&option.number);
                     Row::Out(tally.rounds.iter().position(out)? + 1)
@@ -314,8 +328,11 @@ fn rows(tally: &Tally, round: &Round) -> Vec<(String, Row)> {
             Some((format!("Option {}", option.number), row))
         })
         .collect();
-    rows.push(("Abstained".to_string(), Row::Share(tally.abstained)));
-    let exhausted = 1.0 - tally.abstained - round.voted();
+    // Skip the abstentions row when the policy leaves them out of the majority
+    if tally.abstained - abstained < 0.0005 {
+        rows.push(("Abstained".to_string(), Row::Share(share(abstained))));
+    }
+    let exhausted = share(round.total - abstained - round.voted());
     if exhausted >= 0.0005 {
         rows.push(("No option left".to_string(), Row::Share(exhausted)));
     }
@@ -422,8 +439,8 @@ fn card(tally: &Tally, standing: &Standing) -> Field {
     (format!("{mark} {}", standing.name), lines, true)
 }
 
-/// Each round of an instant runoff: the score of every option still in the race and the
-/// members whose ballot is behind it, with a `+` when it just moved there
+/// Every runoff round: each option's score and ballots (`+` marks a ballot that just moved
+/// there), followed by the abstentions counted in the majority
 fn rounds(tally: &Tally) -> Vec<String> {
     let ballots: Vec<(&str, &[u32])> = tally
         .ballots
@@ -433,6 +450,18 @@ fn rounds(tally: &Tally) -> Vec<String> {
             Vote::Ranked(options) => Some((ballot.member.as_str(), options.as_slice())),
             Vote::Abstain => None,
         })
+        .collect();
+
+    // The abstentions an option needs more than half of, none when the policy leaves them out
+    let abstained = tally
+        .rounds
+        .first()
+        .map_or(0.0, |round| round.total - round.voted());
+    let abstaining: Vec<&str> = tally
+        .ballots
+        .iter()
+        .filter(|ballot| ballot.counted && ballot.vote == Vote::Abstain)
+        .map(|ballot| ballot.member.as_str())
         .collect();
 
     let mut lines = Vec::new();
@@ -475,6 +504,13 @@ fn rounds(tally: &Tally) -> Vec<String> {
                 let _ = write!(line, ": {}", members.join(", "));
             }
             lines.push(line);
+        }
+        if abstained >= 0.0005 && round.total > 0.0 {
+            lines.push(format!(
+                "Abstained **{}**: {}",
+                percent(abstained / round.total),
+                abstaining.join(", ")
+            ));
         }
         let exhausted = behind(None);
         if !exhausted.is_empty() {
@@ -597,8 +633,9 @@ mod tests {
 
     #[test]
     fn the_summary_is_the_outcome_and_the_scores() {
-        // √2 for fyra and 1 for dave alone in the unaffiliated block, nobara and ublue are under
-        // their quorum
+        // fyra gets √2 and dave, alone in the unaffiliated block, gets 1. nobara and ublue miss
+        // their quorum, so frank's ballot isn't counted, and neither is mallory's reply since
+        // mallory isn't a member
         assert_eq!(
             overview(&closed()),
             "**Option 1 passed**\n\
@@ -613,7 +650,7 @@ mod tests {
              \n\
              Option 1 has **58.6%**, more than half is needed\n\
              Quorum: **2** of **4** organisations, **2** needed\n\
-             **4** ballots, **1** reply not counted"
+             **3** valid votes, **0** abstained, **2** not counted"
         );
     }
 
@@ -626,7 +663,10 @@ mod tests {
         assert!(overview.contains("Abstained  █████░░░░░░░   41.4%\n"));
         // dave's abstention still counts toward the weight
         assert!(overview.contains("Option 2 has **58.6%**, more than half"));
-        assert!(overview.ends_with("**2** needed\n**2** ballots"));
+        assert!(
+            overview
+                .ends_with("**2** needed\n**1** valid vote, **1** abstained, **0** not counted")
+        );
     }
 
     #[test]
@@ -637,7 +677,7 @@ mod tests {
             "**Void**, not enough organisations reached quorum\n\
              Closed <t:1789256856:R>\n\
              Quorum: **1** of **4** organisations, **2** needed\n\
-             **1** ballot"
+             **1** valid vote, **0** abstained, **0** not counted"
         );
     }
 
@@ -709,13 +749,48 @@ mod tests {
                 "Option 1 **20.7%**: alice",
                 "Option 2 **29.3%**: dave",
                 "Option 3 **20.7%**: bob",
+                "Abstained **29.3%**: carol",
                 "**Round 2**",
                 "Option 2 **70.7%**: +alice, +bob, dave",
+                "Abstained **29.3%**: carol",
             ]
         );
         assert_eq!(
             field(&fields, "✅ Fyra Labs")[1..],
             ["**Option 1 > 2**: alice", "**Option 3 > 2**: bob"]
+        );
+    }
+
+    #[test]
+    fn abstentions_out_of_the_majority_have_no_share() {
+        let policy = Policy {
+            abstentions: voting::Abstentions::QuorumOnly,
+            ..Policy::default()
+        };
+        let replies = [
+            reply("alice", "Option 1 > Option 2"),
+            reply("bob", "Option 3 > Option 2"),
+            reply("dave", "Option 2"),
+            reply("carol", "Abstain"),
+        ];
+        let now = sent() + TimeDelta::hours(48);
+        let tally = voting::tally(THREE, sent(), &replies, &roster(), &policy, now).unwrap();
+
+        // Bars show each option's share of the total it needs a majority of
+        assert!(overview(&tally).contains(
+            "```\n\
+             Option 1  eliminated in round 1\n\
+             Option 2  ████████████  100.0%\n\
+             Option 3  eliminated in round 1\n\
+             ```\
+             Share of the weight of the organisations that reached quorum\n\
+             After 2 rounds of instant runoff\n"
+        ));
+        let fields = fields(&tally);
+        assert!(
+            !field(&fields, "Runoff")
+                .iter()
+                .any(|line| line.starts_with("Abstained"))
         );
     }
 
