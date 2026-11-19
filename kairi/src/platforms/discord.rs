@@ -6,6 +6,7 @@ use tokio::sync::Mutex;
 
 use crate::actors::{PublicInboxReader, Voting};
 
+mod voteconfig;
 mod votes;
 
 /// The actors the commands talk to
@@ -24,12 +25,13 @@ pub struct DiscordBot {
 }
 
 impl DiscordBot {
-    pub async fn build(token: &str, data: Data) -> anyhow::Result<Self> {
+    /// `rule_changes`: when false, `/voteconfig` only shows the voting rules
+    pub async fn build(token: &str, data: Data, rule_changes: bool) -> anyhow::Result<Self> {
         let intents = serenity::GatewayIntents::all();
 
         let framework = poise::Framework::<Data, SerenityError>::builder()
             .options(poise::FrameworkOptions {
-                commands: vec![ping(), votes::votes()],
+                commands: vec![ping(), votes::votes(), voteconfig::command(rule_changes)],
                 event_handler: |framework, event| {
                     Box::pin(votes::on_event(
                         framework.serenity_context,

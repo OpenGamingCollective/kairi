@@ -6,4 +6,4 @@ mod voting;
 
 pub use public_inbox_reader::{FetchList, PublicInboxReader};
 pub use supervisor::{Kairi, KairiArg};
-pub use voting::{Count, CountVotes, Voting};
+pub use voting::{ChangeRules, Count, CountVotes, Rules, Voting};

@@ -6,7 +6,9 @@ use kameo::{error::SendError, prelude::*};
 use public_inbox::{MailingListError, Thread};
 use thiserror::Error;
 use tracing::{info, instrument};
-use voting::{MotionError, Policy, Reply, Roster, Tally};
+use voting::{
+    Abstentions, BlockWeight, Exhausted, LastTwo, MotionError, Policy, Reply, Roster, Tally,
+};
 
 use crate::{
     actors::public_inbox_reader::{FetchMessages, FetchThread, FindThread, PublicInboxReader},
@@ -15,7 +17,10 @@ use crate::{
 
 pub struct Voting {
     reader: ActorRef<PublicInboxReader>,
+    /// Rules in use right now. `ChangeRules` replaces them
     config: VotingConfig,
+    /// Rules from the config file
+    file: VotingConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -32,6 +37,29 @@ pub struct CountVotes {
     pub thread: String,
     /// Who's asking, for the logs, e.g. `discord /votes @user`
     pub requested_by: String,
+}
+
+/// Change the rules until restart if `voting.rule_changes` allows it, otherwise just read them
+#[derive(Debug, Clone, Default)]
+pub struct ChangeRules {
+    /// Reset to the config file first
+    pub reset: bool,
+    pub internal_quorum: Option<f64>,
+    pub coalition_quorum: Option<f64>,
+    pub window_hours: Option<u32>,
+    pub unaffiliated_weight: Option<BlockWeight>,
+    pub abstentions: Option<Abstentions>,
+    pub exhausted_ballots: Option<Exhausted>,
+    pub last_two_options: Option<LastTwo>,
+    /// Who's asking, for the logs, e.g. `discord /voteconfig @user`
+    pub requested_by: String,
+}
+
+/// The rules in use and the ones from the config file
+#[derive(Debug, Clone)]
+pub struct Rules {
+    pub current: VotingConfig,
+    pub file: VotingConfig,
 }
 
 /// The count for a thread
@@ -61,6 +89,9 @@ pub enum VotingError {
 
     #[error("the mailing list can't be read: {0}")]
     Reader(String),
+
+    #[error("{0}")]
+    Rule(String),
 }
 
 impl<M> From<SendError<M, MailingListError>> for VotingError {
@@ -80,6 +111,7 @@ impl Actor for Voting {
     async fn on_start(args: Self::Args, _actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
         Ok(Self {
             reader: args.reader,
+            file: args.config.clone(),
             config: args.config,
         })
     }
@@ -140,6 +172,7 @@ impl Message<CountVotes> for Voting {
             unaffiliated_weight: self.config.unaffiliated_weight,
             abstentions: self.config.abstentions,
             exhausted: self.config.exhausted_ballots,
+            last_two: self.config.last_two_options,
         };
         let tally = voting::tally(
             &motion.body,
@@ -165,6 +198,101 @@ impl Message<CountVotes> for Voting {
             tally,
         })
     }
+}
+
+impl Message<ChangeRules> for Voting {
+    type Reply = Result<Rules, VotingError>;
+
+    #[instrument(
+        name = "ChangeRules",
+        skip_all,
+        fields(requested_by = %change.requested_by),
+        err(level = "warn")
+    )]
+    async fn handle(
+        &mut self,
+        change: ChangeRules,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let config = changed(&self.config, &self.file, &change)?;
+        if change.changes() {
+            info!(rules = ?config, "the voting rules changed");
+        }
+        self.config = config;
+        Ok(Rules {
+            current: self.config.clone(),
+            file: self.file.clone(),
+        })
+    }
+}
+
+impl ChangeRules {
+    /// Whether this actually changes anything
+    pub fn changes(&self) -> bool {
+        self.reset
+            || self.internal_quorum.is_some()
+            || self.coalition_quorum.is_some()
+            || self.window_hours.is_some()
+            || self.unaffiliated_weight.is_some()
+            || self.abstentions.is_some()
+            || self.exhausted_ballots.is_some()
+            || self.last_two_options.is_some()
+    }
+}
+
+/// Apply a change to the rules. Either all of it applies or none of it does
+fn changed(
+    current: &VotingConfig,
+    file: &VotingConfig,
+    change: &ChangeRules,
+) -> Result<VotingConfig, VotingError> {
+    if change.changes() && !file.rule_changes {
+        return Err(VotingError::Rule(
+            "the rules of this bot only change in its config file".to_string(),
+        ));
+    }
+    let mut config = if change.reset { file } else { current }.clone();
+    for (name, quorum, rule) in [
+        (
+            "internal_quorum",
+            change.internal_quorum,
+            &mut config.internal_quorum,
+        ),
+        (
+            "coalition_quorum",
+            change.coalition_quorum,
+            &mut config.coalition_quorum,
+        ),
+    ] {
+        let Some(quorum) = quorum else { continue };
+        if !(0.0..=1.0).contains(&quorum) {
+            return Err(VotingError::Rule(format!(
+                "{name} must be between 0 and 1, got {quorum}"
+            )));
+        }
+        *rule = quorum;
+    }
+    if let Some(hours) = change.window_hours {
+        if hours == 0 {
+            return Err(VotingError::Rule(
+                "window_hours must be above 0".to_string(),
+            ));
+        }
+        config.window_hours = hours;
+    }
+    if let Some(weight) = change.unaffiliated_weight {
+        config.unaffiliated_weight = weight;
+    }
+    if let Some(abstentions) = change.abstentions {
+        config.abstentions = abstentions;
+    }
+    if let Some(exhausted) = change.exhausted_ballots {
+        config.exhausted_ballots = exhausted;
+    }
+    if let Some(last_two) = change.last_two_options {
+        config.last_two_options = last_two;
+    }
+    Ok(config)
 }
 
 impl Voting {
@@ -263,6 +391,139 @@ fn percent_decode(escaped: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn file() -> VotingConfig {
+        VotingConfig {
+            rule_changes: true,
+            internal_quorum: 0.5,
+            coalition_quorum: 0.5,
+            window_hours: 24,
+            ..VotingConfig::default()
+        }
+    }
+
+    #[test]
+    fn a_change_only_touches_the_rules_it_names() {
+        let change = ChangeRules {
+            abstentions: Some(Abstentions::QuorumOnly),
+            coalition_quorum: Some(0.75),
+            ..ChangeRules::default()
+        };
+        assert!(change.changes());
+        let config = changed(&file(), &file(), &change).unwrap();
+        assert_eq!(config.abstentions, Abstentions::QuorumOnly);
+        assert_eq!(config.coalition_quorum, 0.75);
+        assert_eq!(config.last_two_options, LastTwo::Runoff);
+        assert_eq!(config.exhausted_ballots, Exhausted::Counted);
+        assert_eq!(config.unaffiliated_weight, BlockWeight::Voters);
+        assert_eq!(config.internal_quorum, 0.5);
+        assert_eq!(config.window_hours, 24);
+
+        // Each change builds on the previous one
+        let change = ChangeRules {
+            last_two_options: Some(LastTwo::Final),
+            exhausted_ballots: Some(Exhausted::Dropped),
+            unaffiliated_weight: Some(BlockWeight::Roster),
+            window_hours: Some(48),
+            ..ChangeRules::default()
+        };
+        let config = changed(&config, &file(), &change).unwrap();
+        assert_eq!(config.abstentions, Abstentions::QuorumOnly);
+        assert_eq!(config.last_two_options, LastTwo::Final);
+        assert_eq!(config.exhausted_ballots, Exhausted::Dropped);
+        assert_eq!(config.unaffiliated_weight, BlockWeight::Roster);
+        assert_eq!(config.window_hours, 48);
+    }
+
+    #[test]
+    fn reading_the_rules_changes_nothing() {
+        let current = VotingConfig {
+            last_two_options: LastTwo::Final,
+            ..file()
+        };
+        let read = ChangeRules::default();
+        assert!(!read.changes());
+        let config = changed(&current, &file(), &read).unwrap();
+        assert_eq!(config.last_two_options, LastTwo::Final);
+    }
+
+    #[test]
+    fn a_reset_goes_back_to_the_config_file() {
+        let current = VotingConfig {
+            abstentions: Abstentions::Ignored,
+            last_two_options: LastTwo::Final,
+            internal_quorum: 0.1,
+            ..file()
+        };
+        let reset = ChangeRules {
+            reset: true,
+            ..ChangeRules::default()
+        };
+        let config = changed(&current, &file(), &reset).unwrap();
+        assert_eq!(config.abstentions, Abstentions::Counted);
+        assert_eq!(config.last_two_options, LastTwo::Runoff);
+        assert_eq!(config.internal_quorum, 0.5);
+
+        // Changes sent along with a reset apply on top of the config file
+        let reset = ChangeRules {
+            reset: true,
+            abstentions: Some(Abstentions::QuorumOnly),
+            ..ChangeRules::default()
+        };
+        let config = changed(&current, &file(), &reset).unwrap();
+        assert_eq!(config.abstentions, Abstentions::QuorumOnly);
+        assert_eq!(config.last_two_options, LastTwo::Runoff);
+    }
+
+    #[test]
+    fn the_rules_only_change_where_the_config_file_allows_it() {
+        let file = VotingConfig {
+            rule_changes: false,
+            ..file()
+        };
+        for change in [
+            ChangeRules {
+                last_two_options: Some(LastTwo::Final),
+                ..ChangeRules::default()
+            },
+            ChangeRules {
+                reset: true,
+                ..ChangeRules::default()
+            },
+        ] {
+            assert!(matches!(
+                changed(&file, &file, &change),
+                Err(VotingError::Rule(_))
+            ));
+        }
+        // Reading them still works
+        let config = changed(&file, &file, &ChangeRules::default()).unwrap();
+        assert_eq!(config.last_two_options, LastTwo::Runoff);
+    }
+
+    #[test]
+    fn a_rule_that_cant_be_changes_nothing() {
+        for change in [
+            ChangeRules {
+                internal_quorum: Some(1.5),
+                abstentions: Some(Abstentions::Ignored),
+                ..ChangeRules::default()
+            },
+            ChangeRules {
+                coalition_quorum: Some(-0.1),
+                ..ChangeRules::default()
+            },
+            ChangeRules {
+                window_hours: Some(0),
+                ..ChangeRules::default()
+            },
+        ] {
+            assert!(matches!(
+                changed(&file(), &file(), &change),
+                Err(VotingError::Rule(_))
+            ));
+        }
+    }
 
     fn message_id(id: &str) -> Reference {
         Reference::MessageId(id.to_string())
