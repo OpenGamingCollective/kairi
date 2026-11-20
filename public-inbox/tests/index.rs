@@ -209,3 +209,37 @@ fn mail_is_read_back_from_the_git() {
         Err(MailingListError::EpochNotFound(0))
     ));
 }
+
+#[test]
+fn a_thread_is_found_by_any_of_its_mails() {
+    let dir = tempfile::tempdir().unwrap();
+    let epoch = Epoch::open(dir.path(), 0);
+    epoch.archive(&["a", "b"]);
+    epoch.reply("c", "b");
+    reindex(dir.path());
+
+    let reader = Reader::open(dir.path());
+    let ids = |message_id: &str| -> Option<Vec<String>> {
+        let thread = reader.find_thread(message_id).unwrap()?;
+        Some(
+            thread
+                .mails()
+                .iter()
+                .map(|mail| mail.message_id.clone())
+                .collect(),
+        )
+    };
+
+    assert_eq!(ids("a"), Some(vec!["a".to_string()]));
+    assert_eq!(ids("b"), Some(vec!["b".to_string(), "c".to_string()]));
+    assert_eq!(ids("c"), ids("b"));
+    assert_eq!(ids("d"), None);
+    assert_eq!(ids("../../list"), None);
+}
+
+#[test]
+fn no_thread_is_found_before_the_first_index() {
+    let dir = tempfile::tempdir().unwrap();
+    Epoch::open(dir.path(), 0).archive(&["a"]);
+    assert!(Reader::open(dir.path()).find_thread("a").unwrap().is_none());
+}

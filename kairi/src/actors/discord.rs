@@ -1,14 +1,18 @@
 use std::sync::Arc;
 
-use kameo::Actor;
+use kameo::{Actor, actor::ActorRef};
 use tokio::task::JoinHandle;
 
-use crate::platforms::DiscordBot;
+use crate::{
+    actors::{public_inbox_reader::PublicInboxReader, voting::Voting},
+    platforms::{Data, DiscordBot},
+};
 
 #[derive(Debug, Clone)]
 pub struct DiscordArgs {
     pub token: String,
-    // TODO: put other actors ref here
+    pub voting: ActorRef<Voting>,
+    pub reader: ActorRef<PublicInboxReader>,
 }
 pub struct DiscordActor {
     bot: Arc<DiscordBot>,
@@ -27,7 +31,16 @@ impl Actor for DiscordActor {
         args: Self::Args,
         _actor_ref: kameo::prelude::ActorRef<Self>,
     ) -> Result<Self, Self::Error> {
-        let bot = Arc::new(DiscordBot::build(&args.token).await?);
+        let bot = Arc::new(
+            DiscordBot::build(
+                &args.token,
+                Data {
+                    voting: args.voting,
+                    reader: args.reader,
+                },
+            )
+            .await?,
+        );
 
         let clone = bot.client.clone();
 

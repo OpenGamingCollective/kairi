@@ -16,6 +16,7 @@ use crate::{
         discord::{DiscordActor, DiscordArgs},
         public_inbox_mirror::{PublicInboxMirror, PublicInboxMirrorArgs},
         public_inbox_reader::PublicInboxReader,
+        voting::{Voting, VotingArgs},
     },
     types::MailingListEnum,
 };
@@ -25,6 +26,7 @@ pub struct Kairi {
     pub config: Arc<OnceLock<Config>>,
     pub discord_ref: Arc<OnceLock<ActorRef<DiscordActor>>>,
     pub reader_ref: Arc<OnceLock<ActorRef<PublicInboxReader>>>,
+    pub voting_ref: Arc<OnceLock<ActorRef<Voting>>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -53,17 +55,6 @@ impl Actor for Kairi {
 
         let _ = kairi.config.set(args.config.clone());
 
-        let discord = DiscordActor::supervise(
-            &actor_ref,
-            DiscordArgs {
-                token: args.config.discord.token,
-            },
-        )
-        .restart_policy(RestartPolicy::Permanent)
-        .restart_limit(5, Duration::from_secs(10))
-        .spawn()
-        .await;
-
         let _public_inbox_mirror = PublicInboxMirror::supervise(
             &actor_ref,
             PublicInboxMirrorArgs {
@@ -82,7 +73,35 @@ impl Actor for Kairi {
             .spawn()
             .await;
 
+        let voting = Voting::supervise(
+            &actor_ref,
+            VotingArgs {
+                reader: public_inbox_reader.clone(),
+                config: args.config.voting,
+            },
+        )
+        .restart_policy(RestartPolicy::Permanent)
+        .restart_limit(5, Duration::from_secs(10))
+        .spawn()
+        .await;
+
+        // Last, its commands ask the other actors
+        let discord = DiscordActor::supervise(
+            &actor_ref,
+            DiscordArgs {
+                token: args.config.discord.token,
+                voting: voting.clone(),
+                reader: public_inbox_reader.clone(),
+            },
+        )
+        .restart_policy(RestartPolicy::Permanent)
+        .restart_limit(5, Duration::from_secs(10))
+        .spawn()
+        .await;
+
         let _ = kairi.reader_ref.set(public_inbox_reader);
+
+        let _ = kairi.voting_ref.set(voting);
 
         let _ = kairi.discord_ref.set(discord);
 

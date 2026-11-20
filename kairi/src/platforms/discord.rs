@@ -1,10 +1,18 @@
 use std::sync::Arc;
 
+use kameo::actor::ActorRef;
 use poise::serenity_prelude as serenity;
 use tokio::sync::Mutex;
 
-#[derive(Default)]
-struct Data {}
+use crate::actors::{PublicInboxReader, Voting};
+
+mod votes;
+
+/// What the commands can ask the other actors
+pub struct Data {
+    pub voting: ActorRef<Voting>,
+    pub reader: ActorRef<PublicInboxReader>,
+}
 
 type SerenityError = Box<dyn std::error::Error + Send + Sync>;
 
@@ -16,18 +24,25 @@ pub struct DiscordBot {
 }
 
 impl DiscordBot {
-    pub async fn build(token: &str) -> anyhow::Result<Self> {
+    pub async fn build(token: &str, data: Data) -> anyhow::Result<Self> {
         let intents = serenity::GatewayIntents::all();
 
         let framework = poise::Framework::<Data, SerenityError>::builder()
             .options(poise::FrameworkOptions {
-                commands: vec![ping()],
+                commands: vec![ping(), votes::votes()],
+                event_handler: |framework, event| {
+                    Box::pin(votes::on_event(
+                        framework.serenity_context,
+                        event,
+                        framework.user_data,
+                    ))
+                },
                 ..Default::default()
             })
             .setup(move |ctx, _ready, framework| {
                 Box::pin(async move {
                     poise::builtins::register_globally(ctx, &framework.options().commands).await?;
-                    Ok(Data {})
+                    Ok(data)
                 })
             })
             .build();
