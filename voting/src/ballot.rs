@@ -174,7 +174,7 @@ fn read_line(line: &str, motion: &Motion) -> Option<Line> {
     ] = rest
         && option_word(word)
     {
-        rank = Some(number.parse().ok()?);
+        rank = Some(digits(number)?);
         rest = &rest[2..];
     }
 
@@ -239,11 +239,11 @@ fn reference<'t, 'a>(tokens: &'t [Token<'a>]) -> Option<(u32, bool, &'t [Token<'
             }
         }
         [Token::Punctuation('#'), Token::Word(number), tail @ ..] => {
-            Some((number.parse().ok()?, false, tail))
+            Some((digits(number)?, false, tail))
         }
         [Token::Word(word), tail @ ..] => match word.strip_prefix("option") {
-            Some(number) => Some((number.parse().ok()?, true, tail)),
-            None => Some((word.parse().ok()?, false, tail)),
+            Some(number) => Some((digits(number)?, true, tail)),
+            None => Some((digits(word)?, false, tail)),
         },
         _ => None,
     }
@@ -253,8 +253,16 @@ fn option_word(word: &str) -> bool {
     matches!(word, "option" | "options" | "opt")
 }
 
+/// Plain ASCII digits only, since `u32::from_str` accepts `+2`
+fn digits(word: &str) -> Option<u32> {
+    if word.is_empty() || !word.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    word.parse().ok()
+}
+
 fn number_of(word: &str) -> Option<u32> {
-    word.parse().ok().or_else(|| {
+    digits(word).or_else(|| {
         let position = NUMBERS.iter().position(|number| *number == word)?;
         u32::try_from(position + 1).ok()
     })
@@ -436,6 +444,10 @@ mod tests {
             "On Friday, September 11, 2026 23:47 UTC, Derek wrote:",
             "2026",
             "+1",
+            "+2",
+            "+1 +2",
+            "Option +2",
+            "#+2",
             "Sent from my phone",
         ] {
             assert_eq!(vote(body), Reading::NoVote, "{body}");
