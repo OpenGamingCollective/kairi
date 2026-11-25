@@ -1,6 +1,6 @@
 use std::{fs, path::PathBuf};
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 use voting::{Abstentions, BlockWeight, Exhausted, LastTwo};
 
@@ -26,7 +26,7 @@ pub struct VotingConfigFile {
     pub coalition_quorum: f64,
     /// How long a vote stays open if its first mail doesn't say
     pub window_hours: u32,
-    /// Members the weight of the unaffiliated block is the square root of, `voters` or `roster`
+    /// Which members the unaffiliated block weighs the square root of, `voters` or `roster`
     pub unaffiliated_weight: BlockWeight,
     /// How abstentions are treated: `counted`, `quorum_only` or `ignored`
     pub abstentions: Abstentions,
@@ -108,6 +108,23 @@ pub struct VotingConfig {
     pub rule_changes: bool,
 }
 
+impl VotingConfig {
+    pub fn check(&self) -> std::result::Result<(), String> {
+        for (name, quorum) in [
+            ("internal_quorum", self.internal_quorum),
+            ("coalition_quorum", self.coalition_quorum),
+        ] {
+            if !(0.0..=1.0).contains(&quorum) {
+                return Err(format!("{name} must be between 0 and 1, got {quorum}"));
+            }
+        }
+        if self.window_hours == 0 {
+            return Err("window_hours must be above 0".to_string());
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Default, Deserialize, Serialize, Clone)]
 /// TypeSafe account config used for Jev
 pub struct TypesafeConfig {
@@ -154,19 +171,18 @@ impl Config {
         .to_string();
 
         let voting = config_file.voting;
-        for (name, quorum) in [
-            ("internal_quorum", voting.internal_quorum),
-            ("coalition_quorum", voting.coalition_quorum),
-        ] {
-            ensure!(
-                (0.0..=1.0).contains(&quorum),
-                "voting.{name} must be between 0 and 1, got {quorum}"
-            );
-        }
-        ensure!(
-            voting.window_hours > 0,
-            "voting.window_hours must be above 0"
-        );
+        let voting = VotingConfig {
+            roster_path: (!voting.roster_path.is_empty()).then_some(voting.roster_path),
+            internal_quorum: voting.internal_quorum,
+            coalition_quorum: voting.coalition_quorum,
+            window_hours: voting.window_hours,
+            unaffiliated_weight: voting.unaffiliated_weight,
+            abstentions: voting.abstentions,
+            exhausted_ballots: voting.exhausted_ballots,
+            last_two_options: voting.last_two_options,
+            rule_changes: voting.rule_changes,
+        };
+        voting.check().map_err(|error| anyhow!("voting.{error}"))?;
 
         Ok(Self {
             discord: DiscordConfig {
@@ -179,17 +195,7 @@ impl Config {
             typesafe: TypesafeConfig {
                 token: typesafe_token,
             },
-            voting: VotingConfig {
-                roster_path: (!voting.roster_path.is_empty()).then_some(voting.roster_path),
-                internal_quorum: voting.internal_quorum,
-                coalition_quorum: voting.coalition_quorum,
-                window_hours: voting.window_hours,
-                unaffiliated_weight: voting.unaffiliated_weight,
-                abstentions: voting.abstentions,
-                exhausted_ballots: voting.exhausted_ballots,
-                last_two_options: voting.last_two_options,
-                rule_changes: voting.rule_changes,
-            },
+            voting,
         })
     }
 }

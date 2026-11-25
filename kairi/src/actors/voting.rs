@@ -165,21 +165,12 @@ impl Message<CountVotes> for Voting {
         let motion = mails.next().ok_or(VotingError::NoSuchThread)?;
         let replies: Vec<Reply> = mails.collect();
 
-        let policy = Policy {
-            internal_quorum: self.config.internal_quorum,
-            coalition_quorum: self.config.coalition_quorum,
-            window: TimeDelta::hours(self.config.window_hours.into()),
-            unaffiliated_weight: self.config.unaffiliated_weight,
-            abstentions: self.config.abstentions,
-            exhausted: self.config.exhausted_ballots,
-            last_two: self.config.last_two_options,
-        };
         let tally = voting::tally(
             &motion.body,
             motion.date,
             &replies,
             &roster,
-            &policy,
+            &policy(&self.config),
             Utc::now(),
         )?;
 
@@ -252,32 +243,13 @@ fn changed(
         ));
     }
     let mut config = if change.reset { file } else { current }.clone();
-    for (name, quorum, rule) in [
-        (
-            "internal_quorum",
-            change.internal_quorum,
-            &mut config.internal_quorum,
-        ),
-        (
-            "coalition_quorum",
-            change.coalition_quorum,
-            &mut config.coalition_quorum,
-        ),
-    ] {
-        let Some(quorum) = quorum else { continue };
-        if !(0.0..=1.0).contains(&quorum) {
-            return Err(VotingError::Rule(format!(
-                "{name} must be between 0 and 1, got {quorum}"
-            )));
-        }
-        *rule = quorum;
+    if let Some(quorum) = change.internal_quorum {
+        config.internal_quorum = quorum;
+    }
+    if let Some(quorum) = change.coalition_quorum {
+        config.coalition_quorum = quorum;
     }
     if let Some(hours) = change.window_hours {
-        if hours == 0 {
-            return Err(VotingError::Rule(
-                "window_hours must be above 0".to_string(),
-            ));
-        }
         config.window_hours = hours;
     }
     if let Some(weight) = change.unaffiliated_weight {
@@ -292,7 +264,20 @@ fn changed(
     if let Some(last_two) = change.last_two_options {
         config.last_two_options = last_two;
     }
+    config.check().map_err(VotingError::Rule)?;
     Ok(config)
+}
+
+fn policy(config: &VotingConfig) -> Policy {
+    Policy {
+        internal_quorum: config.internal_quorum,
+        coalition_quorum: config.coalition_quorum,
+        window: TimeDelta::hours(config.window_hours.into()),
+        unaffiliated_weight: config.unaffiliated_weight,
+        abstentions: config.abstentions,
+        exhausted: config.exhausted_ballots,
+        last_two: config.last_two_options,
+    }
 }
 
 impl Voting {
