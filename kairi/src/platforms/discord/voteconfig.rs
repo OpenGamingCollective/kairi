@@ -84,8 +84,9 @@ async fn edit(
     last_two_options: Option<LastTwoChoice>,
     #[description = "Does a ballot with no option left stay in what an option needs more than half of"]
     exhausted_ballots: Option<ExhaustedChoice>,
-    #[description = "Members the weight of the unaffiliated block is the square root of"]
-    unaffiliated_weight: Option<BlockWeightChoice>,
+    #[description = "Size of the unaffiliated block"] unaffiliated_weight: Option<
+        BlockWeightChoice,
+    >,
     #[description = "Share of an organisation's roster that has to vote for it to count, 0 to 1"]
     #[min = 0.0]
     #[max = 1.0]

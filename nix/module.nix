@@ -162,7 +162,7 @@
                         "roster"
                       ];
                       default = "voters";
-                      description = "Members the weight of the unaffiliated block is the square root of";
+                      description = "Size of the unaffiliated block";
                     };
                     abstentions = lib.mkOption {
                       type = lib.types.enum [

@@ -26,7 +26,7 @@ pub struct VotingConfigFile {
     pub coalition_quorum: f64,
     /// How long a vote stays open if its first mail doesn't say
     pub window_hours: u32,
-    /// Which members the unaffiliated block weighs the square root of, `voters` or `roster`
+    /// What the unaffiliated block's size is based on: `voters` or `roster`
     pub unaffiliated_weight: BlockWeight,
     /// How abstentions are treated: `counted`, `quorum_only` or `ignored`
     pub abstentions: Abstentions,

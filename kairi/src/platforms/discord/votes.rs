@@ -297,11 +297,7 @@ fn headline(tally: &Tally) -> String {
 ///
 /// `round` is the final round. Options eliminated earlier show the round they went out in
 fn rows(tally: &Tally, round: &Round) -> Vec<(String, Row)> {
-    // The abstentions that are part of what an option needs more than half of
-    let abstained = tally
-        .rounds
-        .first()
-        .map_or(0.0, |round| round.total - round.voted());
+    let abstained = abstained_in_majority(tally);
     let share = |weight: f64| {
         if round.total > 0.0 {
             weight / round.total
@@ -329,7 +325,8 @@ fn rows(tally: &Tally, round: &Round) -> Vec<(String, Row)> {
         })
         .collect();
     // Skip the abstentions row when the policy leaves them out of the majority
-    if tally.abstained - abstained < 0.0005 {
+    let left_out_by_policy = tally.abstained - abstained >= 0.0005;
+    if !left_out_by_policy {
         rows.push(("Abstained".to_string(), Row::Share(share(abstained))));
     }
     let exhausted = share(round.total - abstained - round.voted());
@@ -452,11 +449,7 @@ fn rounds(tally: &Tally) -> Vec<String> {
         })
         .collect();
 
-    // The abstentions an option needs more than half of, none when the policy leaves them out
-    let abstained = tally
-        .rounds
-        .first()
-        .map_or(0.0, |round| round.total - round.voted());
+    let abstained = abstained_in_majority(tally);
     let abstaining: Vec<&str> = tally
         .ballots
         .iter()
@@ -519,6 +512,14 @@ fn rounds(tally: &Tally) -> Vec<String> {
         before = choices;
     }
     lines
+}
+
+/// Abstentions counted in the majority, or 0 if the policy leaves them out
+fn abstained_in_majority(tally: &Tally) -> f64 {
+    tally
+        .rounds
+        .first()
+        .map_or(0.0, |round| round.total - round.voted())
 }
 
 fn percent(share: f64) -> String {
