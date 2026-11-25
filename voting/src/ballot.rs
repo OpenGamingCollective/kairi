@@ -128,9 +128,12 @@ fn written<'a>(body: &'a str, motion: &Motion) -> Vec<&'a str> {
         return unquoted;
     };
 
+    // An `Option 1: <title>` line above the quote is still a vote
     let quote = unquoted[..cut]
         .iter()
-        .position(|line| quote_header(line) || motion.quotes(line))
+        .position(|line| {
+            quote_header(line) || (motion.quotes(line) && read_line(line, motion).is_none())
+        })
         .unwrap_or(cut);
     let mut written = unquoted[..quote].to_vec();
     written.extend(&unquoted[cut + 1..]);
@@ -386,6 +389,16 @@ mod tests {
         assert_eq!(vote(&bare), ranked(&[1]));
 
         assert_eq!(vote(MAIL), Reading::NoVote);
+    }
+
+    #[test]
+    fn vote_with_its_title_above_a_mail_quoted_without_a_prefix() {
+        let title = "Option 1: Square-Root Proportional Weighting and Dual-Gate Quorum Model";
+        let header = format!("{title}\n\nFrom: Derek\nSent: Friday\n\n{MAIL}");
+        assert_eq!(vote(&header), ranked(&[1]));
+
+        let bare = format!("{title}\n\n{MAIL}");
+        assert_eq!(vote(&bare), ranked(&[1]));
     }
 
     #[test]
