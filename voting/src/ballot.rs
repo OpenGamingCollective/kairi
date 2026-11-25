@@ -81,20 +81,19 @@ pub fn read(body: &str, motion: &Motion) -> Reading {
     // The same vote repeated counts once, and numbered lines are sorted by rank
     votes.sort_unstable();
     votes.dedup();
-    let unique = votes;
 
-    match (abstains, unique.len()) {
+    match (abstains, votes.len()) {
         (false, 0) => Reading::NoVote,
         (true, 0) => Reading::Vote(Vote::Abstain),
         (true, _) => Reading::Conflicting,
-        (false, 1) => Reading::Vote(Vote::Ranked(unique[0].1.to_vec())),
+        (false, 1) => Reading::Vote(Vote::Ranked(votes[0].1.to_vec())),
         // Several lines only make a ranking if every one of them is numbered
         (false, _) => {
-            let numbered = unique
+            let numbered = votes
                 .iter()
                 .all(|(rank, options)| rank.is_some() && options.len() == 1);
-            let options: Vec<u32> = unique.iter().map(|(_, options)| options[0]).collect();
-            let ranks: Vec<Option<u32>> = unique.iter().map(|(rank, _)| *rank).collect();
+            let options: Vec<u32> = votes.iter().map(|(_, options)| options[0]).collect();
+            let ranks: Vec<Option<u32>> = votes.iter().map(|(rank, _)| *rank).collect();
             if numbered && !repeats(&options) && !repeats(&ranks) {
                 Reading::Vote(Vote::Ranked(options))
             } else {

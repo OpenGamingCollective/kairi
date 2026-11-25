@@ -107,28 +107,29 @@ impl Roster {
     /// slug. Entities left with no members are skipped
     pub fn entities(&self) -> Vec<Entity> {
         let mut affiliated: BTreeSet<&String> = BTreeSet::new();
-        let mut entities: Vec<Entity> = self
-            .groups
-            .iter()
-            .filter(|(_, group)| group.org)
-            .map(|(slug, group)| Entity {
+        let mut entities: Vec<Entity> = Vec::new();
+        for (slug, group) in self.groups.iter().filter(|(_, group)| group.org) {
+            let mut members = BTreeSet::new();
+            for username in &group.members {
+                if self.can_vote(username) && affiliated.insert(username) {
+                    members.insert(username.clone());
+                }
+            }
+            if members.is_empty() {
+                continue;
+            }
+            let name = if group.description.is_empty() {
+                slug
+            } else {
+                &group.description
+            };
+            entities.push(Entity {
                 slug: slug.clone(),
-                name: if group.description.is_empty() {
-                    slug.clone()
-                } else {
-                    group.description.clone()
-                },
+                name: name.clone(),
                 unaffiliated: false,
-                members: group
-                    .members
-                    .iter()
-                    .filter(|username| self.can_vote(username))
-                    .filter(|username| affiliated.insert(username))
-                    .cloned()
-                    .collect(),
-            })
-            .collect();
-        entities.retain(|entity| !entity.members.is_empty());
+                members,
+            });
+        }
 
         let unaffiliated: BTreeSet<String> = self
             .members

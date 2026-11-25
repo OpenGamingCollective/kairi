@@ -9,14 +9,13 @@
 //! - Weights are normalised across the entities that count, then split among their ballots
 //! - An option passes with more than half of the counted weight. Rankings go to a runoff
 //!
-//! What the approved text leaves open is decided here: the quorums come from the [`Policy`],
-//! the block of the unaffiliated has no internal quorum since it has no stance to form and
-//! weighs the square root of its members who voted rather than of all of them, so that a few
-//! voters don't carry the weight of the whole block. A member listed by several organisations
-//! only votes in the first of them. A ballot that
-//! abstains, or that only ranked options that are out of the runoff, is still part of the
-//! weight an option needs more than half of. Once two options are left, the weaker one is still
-//! eliminated and its ballots can pass the other, unless the [`Policy`] says the count stops there
+//! Things the approved text leaves open, mostly settled by the [`Policy`]:
+//!
+//! - The unaffiliated block has no internal quorum, and weighs the root of its voter count
+//! - A member of several organisations votes in the first one by slug
+//! - Abstentions and exhausted ballots count in the majority
+//! - Options tied for last are eliminated together
+//! - The last two options still run off
 
 use std::collections::BTreeMap;
 
@@ -32,7 +31,7 @@ use crate::{
 /// Scores closer than this are tied
 const EPSILON: f64 = 1e-9;
 
-/// Members the weight of the unaffiliated block is the square root of
+/// What the unaffiliated block's size is based on
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BlockWeight {
@@ -125,7 +124,7 @@ pub struct Ballot {
     pub member: String,
     pub vote: Vote,
     pub url: String,
-    /// Whether any of the member's organisations, or the unaffiliated block, counted
+    /// Whether its entity reached quorum
     pub counted: bool,
 }
 
@@ -156,11 +155,10 @@ pub struct Standing {
     pub name: String,
     pub unaffiliated: bool,
     pub roster: usize,
-    /// Members its weight is the square root of, the roster unless the [`Policy`] only weighs
-    /// the voters of the unaffiliated block
+    /// Roster size, or the number of voters for the unaffiliated block
     pub size: usize,
     pub voted: usize,
-    /// Usernames of its members who voted, a member who abstains may not be one of them
+    /// Usernames of its voters
     pub voters: Vec<String>,
     /// Whether it passed the internal quorum
     pub counts: bool,
@@ -173,9 +171,9 @@ pub struct Standing {
 pub struct Round {
     /// Share behind each option still in the race, in motion order
     pub scores: Vec<(u32, f64)>,
-    /// Out before the next round
+    /// Options eliminated after this round
     pub eliminated: Vec<u32>,
-    /// Weight an option needs more than half of
+    /// The total an option needs more than half of to win
     pub total: f64,
 }
 
@@ -289,14 +287,11 @@ pub fn tally(
     let void =
         counting == 0 || (counting as f64) < policy.coalition_quorum * standings.len() as f64;
 
-    // Each ballot carries its share of the weight of each entity its member votes in
     let mut shares: BTreeMap<&str, f64> = BTreeMap::new();
-    for standing in &standings {
-        if !standing.counts {
-            continue;
-        }
+    for standing in standings.iter().filter(|standing| standing.counts) {
+        let share = standing.weight / standing.voted as f64;
         for member in &standing.voters {
-            *shares.entry(member.as_str()).or_default() += standing.weight / standing.voted as f64;
+            shares.insert(member.as_str(), share);
         }
     }
 
