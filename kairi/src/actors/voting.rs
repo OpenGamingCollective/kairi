@@ -9,18 +9,20 @@ use tracing::{info, instrument};
 use voting::{MotionError, Policy, Reply, Roster, Tally};
 
 use crate::{
-    actors::public_inbox_reader::{FetchMessages, FetchThread, FindThread, PublicInboxReader},
+    actors::{
+        NotRunning,
+        public_inbox_reader::{FetchMessages, FetchThread, FindThread},
+        reader,
+    },
     types::MailingListEnum,
 };
 
 pub struct Voting {
-    reader: ActorRef<PublicInboxReader>,
     config: VotingConfig,
 }
 
 #[derive(Debug, Clone)]
 pub struct VotingArgs {
-    pub reader: ActorRef<PublicInboxReader>,
     pub config: VotingConfig,
 }
 
@@ -43,6 +45,9 @@ pub struct Count {
 
 #[derive(Debug, Error)]
 pub enum VotingError {
+    #[error(transparent)]
+    NotRunning(#[from] NotRunning),
+
     #[error("no roster is configured, `voting.roster_path` is not set")]
     NoRoster,
 
@@ -73,9 +78,9 @@ impl Actor for Voting {
         "voting"
     }
 
-    async fn on_start(args: Self::Args, _actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
+    async fn on_start(args: Self::Args, actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
+        actor_ref.register(<Self as Actor>::name())?;
         Ok(Self {
-            reader: args.reader,
             config: args.config,
         })
     }
@@ -106,8 +111,7 @@ impl Message<CountVotes> for Voting {
             .thread(list, &thread, &requested_by)
             .await?
             .ok_or(VotingError::NoSuchThread)?;
-        let messages = self
-            .reader
+        let messages = reader()?
             .ask(FetchMessages {
                 list,
                 mails: thread.mails().to_vec(),
@@ -190,7 +194,7 @@ impl Voting {
                     uid,
                     requested_by,
                 };
-                self.reader.ask(fetch).await?
+                reader()?.ask(fetch).await?
             }
             Reference::MessageId(message_id) => {
                 let find = FindThread {
@@ -198,7 +202,7 @@ impl Voting {
                     message_id,
                     requested_by,
                 };
-                self.reader.ask(find).await?
+                reader()?.ask(find).await?
             }
         };
         Ok(thread)

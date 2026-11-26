@@ -1,18 +1,13 @@
 use std::sync::Arc;
 
 use kairi_config::VotingConfig;
-use kameo::actor::ActorRef;
 use poise::serenity_prelude as serenity;
 use tokio::sync::Mutex;
-
-use crate::actors::{PublicInboxReader, Voting};
 
 mod voteconfig;
 mod votes;
 
 pub struct Data {
-    pub voting: ActorRef<Voting>,
-    pub reader: ActorRef<PublicInboxReader>,
     pub rules: VotingConfig,
 }
 
@@ -33,11 +28,7 @@ impl DiscordBot {
             .options(poise::FrameworkOptions {
                 commands: vec![ping(), votes::votes(), voteconfig::voteconfig()],
                 event_handler: |framework, event| {
-                    Box::pin(votes::on_event(
-                        framework.serenity_context,
-                        event,
-                        framework.user_data,
-                    ))
+                    Box::pin(votes::on_event(framework.serenity_context, event))
                 },
                 ..Default::default()
             })

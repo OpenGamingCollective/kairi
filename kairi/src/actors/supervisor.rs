@@ -76,7 +76,6 @@ impl Actor for Kairi {
         let voting = Voting::supervise(
             &actor_ref,
             VotingArgs {
-                reader: public_inbox_reader.clone(),
                 config: args.config.voting.clone(),
             },
         )
@@ -91,8 +90,6 @@ impl Actor for Kairi {
             DiscordArgs {
                 rules: args.config.voting.clone(),
                 token: args.config.discord.token,
-                voting: voting.clone(),
-                reader: public_inbox_reader.clone(),
             },
         )
         .restart_policy(RestartPolicy::Permanent)

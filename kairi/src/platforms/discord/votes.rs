@@ -7,9 +7,9 @@ use poise::serenity_prelude as serenity;
 use strum::VariantArray;
 use voting::{Ballot, Outcome, Reason, Round, Standing, Tally, Vote};
 
-use super::{Data, SerenityContext, SerenityError};
+use super::{SerenityContext, SerenityError};
 use crate::{
-    actors::{Count, CountVotes, FetchList},
+    actors::{Count, CountVotes, FetchList, reader, voting},
     types::MailingListEnum,
 };
 
@@ -50,7 +50,7 @@ pub async fn votes(
         thread,
         requested_by: format!("discord /votes @{}", ctx.author().name),
     };
-    match ctx.data().voting.ask(count).await {
+    match count_votes(count).await {
         Ok(count) => {
             let details = serenity::CreateButton::new(details_id(&count))
                 .label("Details")
@@ -60,12 +60,8 @@ pub async fn votes(
                 .components(vec![serenity::CreateActionRow::Buttons(vec![details])]);
             ctx.send(reply).await?;
         }
-        Err(SendError::HandlerError(error)) => {
-            ctx.say(format!("Can't count the votes: {error}")).await?;
-        }
         Err(error) => {
-            ctx.say(format!("Can't count the votes right now: {error}"))
-                .await?;
+            ctx.say(error).await?;
         }
     }
     Ok(())
@@ -75,7 +71,6 @@ pub async fn votes(
 pub async fn on_event(
     ctx: &serenity::Context,
     event: &serenity::FullEvent,
-    data: &Data,
 ) -> Result<(), SerenityError> {
     let serenity::FullEvent::InteractionCreate { interaction } = event else {
         return Ok(());
@@ -94,15 +89,21 @@ pub async fn on_event(
         requested_by: format!("discord /votes details @{}", component.user.name),
     };
     let followup = serenity::CreateInteractionResponseFollowup::new().ephemeral(true);
-    let followup = match data.voting.ask(count).await {
+    let followup = match count_votes(count).await {
         Ok(count) => followup.embed(details(&count)),
-        Err(SendError::HandlerError(error)) => {
-            followup.content(format!("Can't count the votes: {error}"))
-        }
-        Err(error) => followup.content(format!("Can't count the votes right now: {error}")),
+        Err(error) => followup.content(error),
     };
     component.create_followup(&ctx.http, followup).await?;
     Ok(())
+}
+
+/// Ask the voting actor for a count
+async fn count_votes(count: CountVotes) -> Result<Count, String> {
+    let voting = voting().map_err(|error| format!("Can't count the votes right now, {error}"))?;
+    voting.ask(count).await.map_err(|error| match error {
+        SendError::HandlerError(error) => format!("Can't count the votes: {error}"),
+        error => format!("Can't count the votes right now: {error}"),
+    })
 }
 
 fn details_id(count: &Count) -> String {
@@ -127,7 +128,10 @@ async fn threads(ctx: SerenityContext<'_>, partial: &str) -> serenity::CreateAut
         list: MailingListEnum::Governance,
         requested_by: format!("discord /votes autocomplete @{}", ctx.author().name),
     };
-    let list = ctx.data().reader.ask(fetch).await.unwrap_or_default();
+    let list = match reader() {
+        Ok(reader) => reader.ask(fetch).await.unwrap_or_default(),
+        Err(_) => Default::default(),
+    };
 
     let partial = partial.to_lowercase();
     let choices = list

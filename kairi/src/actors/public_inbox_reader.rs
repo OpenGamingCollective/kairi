@@ -54,7 +54,8 @@ impl Actor for PublicInboxReader {
         "public-inbox-reader"
     }
 
-    async fn on_start(dir: Self::Args, _actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
+    async fn on_start(dir: Self::Args, actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
+        actor_ref.register(<Self as Actor>::name())?;
         Ok(Self { dir })
     }
 }
