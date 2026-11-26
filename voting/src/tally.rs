@@ -93,7 +93,6 @@ pub enum Reason {
 /// An organisation or the unaffiliated block
 #[derive(Debug, Clone, PartialEq)]
 pub struct Standing {
-    pub slug: String,
     pub name: String,
     pub unaffiliated: bool,
     pub roster: usize,
@@ -192,7 +191,6 @@ pub fn tally(
             let counts = voted > 0
                 && (entity.unaffiliated || voted as f64 >= policy.internal_quorum * roster as f64);
             Standing {
-                slug: entity.slug.clone(),
                 name: entity.name.clone(),
                 unaffiliated: entity.unaffiliated,
                 roster,
@@ -254,8 +252,8 @@ pub fn tally(
     Ok(Tally {
         open: now < motion.closes,
         motion,
-        members: roster.members(),
-        eligible: roster.eligible(),
+        members: roster.member_count(),
+        eligible: roster.eligible_count(),
         ballots,
         rejected,
         standings,
@@ -404,7 +402,7 @@ fn runoff(options: &[u32], ballots: &[(&[u32], f64)]) -> (Vec<Round>, Outcome) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{motion::tests::sent, roster::UNAFFILIATED};
+    use crate::motion::tests::sent;
 
     const MAIL: &str = "Voting will be open for 24 hours.\nOption 1: a\nOption 2: b\n";
     const THREE: &str = "Option 1: a\nOption 2: b\nOption 3: c\n";
@@ -459,11 +457,19 @@ mod tests {
         count_with(MAIL, replies, &Policy::default())
     }
 
-    fn standing<'a>(tally: &'a Tally, slug: &str) -> &'a Standing {
+    fn standing<'a>(tally: &'a Tally, name: &str) -> &'a Standing {
         tally
             .standings
             .iter()
-            .find(|standing| standing.slug == slug)
+            .find(|standing| standing.name == name)
+            .unwrap()
+    }
+
+    fn unaffiliated(tally: &Tally) -> &Standing {
+        tally
+            .standings
+            .iter()
+            .find(|standing| standing.unaffiliated)
             .unwrap()
     }
 
@@ -505,9 +511,9 @@ mod tests {
         assert!(close(standing(&tally, "duo").weight, 2f64.sqrt() / pool));
         let solo = standing(&tally, "solo");
         assert_eq!((solo.roster, solo.voted, solo.counts), (1, 0, false));
-        assert!(close(standing(&tally, UNAFFILIATED).weight, 1.0 / pool));
+        assert!(close(unaffiliated(&tally).weight, 1.0 / pool));
         // mute can't vote, so the block only counts the three who can
-        assert_eq!(standing(&tally, UNAFFILIATED).roster, 3);
+        assert_eq!(unaffiliated(&tally).roster, 3);
 
         assert!(close(score(&tally, 0, 1), 2.0 / pool));
         assert_eq!(tally.outcome, Outcome::Passed(2));
@@ -543,7 +549,7 @@ mod tests {
         assert_eq!(big.weight, 0.0);
         assert!(standing(&tally, "duo").counts);
         // The unaffiliated block has no quorum
-        assert!(standing(&tally, UNAFFILIATED).counts);
+        assert!(unaffiliated(&tally).counts);
 
         assert!(close(score(&tally, 0, 2), 1.0));
         assert_eq!(tally.outcome, Outcome::Passed(2));
@@ -809,7 +815,7 @@ mod tests {
             ("free1", "Option 2"),
         ]);
         let tally = count(&replies);
-        assert!(close(standing(&tally, UNAFFILIATED).weight, 1.0 / 3.0));
+        assert!(close(unaffiliated(&tally).weight, 1.0 / 3.0));
         assert!(close(score(&tally, 0, 1), 2.0 / 3.0));
         assert_eq!(tally.outcome, Outcome::Passed(1));
     }

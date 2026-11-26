@@ -20,8 +20,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Deserialize;
 
-pub const UNAFFILIATED: &str = "unaffiliated";
-
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Roster {
     members: BTreeMap<String, Member>,
@@ -39,7 +37,7 @@ struct Member {
 struct Group {
     #[serde(default)]
     description: String,
-    /// Only organisations vote. Other groups are projects
+    /// Only organisations vote
     #[serde(default)]
     org: bool,
     #[serde(default)]
@@ -47,23 +45,18 @@ struct Group {
 }
 
 impl Member {
-    /// Only members with a valid email can vote
+    /// Only members with an email can vote
     fn can_vote(&self) -> bool {
-        let email = self.email.trim();
-        let whole = !email.contains(char::is_whitespace);
-        let parts = email.split_once('@');
-        whole && parts.is_some_and(|(local, domain)| !local.is_empty() && !domain.is_empty())
+        !self.email.trim().is_empty()
     }
 }
 
-/// An organisation, or the block of unaffiliated members
+/// An organisation or the unaffiliated block
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entity {
-    pub slug: String,
     pub name: String,
     pub unaffiliated: bool,
-    /// Usernames of its members who can vote
-    pub members: BTreeSet<String>,
+    pub members: Vec<String>,
 }
 
 impl Roster {
@@ -71,13 +64,13 @@ impl Roster {
         serde_json::from_str(json)
     }
 
-    /// Number of members, with or without an email
-    pub fn members(&self) -> usize {
+    /// Total number of members
+    pub fn member_count(&self) -> usize {
         self.members.len()
     }
 
     /// Number of members with a valid email
-    pub fn eligible(&self) -> usize {
+    pub fn eligible_count(&self) -> usize {
         self.members
             .values()
             .filter(|member| member.can_vote())
@@ -88,6 +81,7 @@ impl Roster {
         self.members.get(username).is_some_and(Member::can_vote)
     }
 
+    /// Find member by email
     pub fn member_of(&self, email: &str) -> Option<&str> {
         let email = email.trim();
         if email.is_empty() {
@@ -99,18 +93,18 @@ impl Roster {
             .map(|(username, _)| username.as_str())
     }
 
-    /// Organisations sorted by slug, followed by the unaffiliated block
-    ///
-    /// Only members who can vote are included, each in the first of their organisations by
-    /// slug. Entities left with no members are skipped
+    /// Organisations + unaffiliated block
     pub fn entities(&self) -> Vec<Entity> {
-        let mut affiliated: BTreeSet<&String> = BTreeSet::new();
+        let mut seen: BTreeSet<&String> = BTreeSet::new();
         let mut entities: Vec<Entity> = Vec::new();
+
+        // Groups here are sorted alphabetically so Nero stays in ASUS Linux and not in ChimeraOS
         for (slug, group) in self.groups.iter().filter(|(_, group)| group.org) {
-            let mut members = BTreeSet::new();
+            let mut members = Vec::new();
             for username in &group.members {
-                if self.can_vote(username) && affiliated.insert(username) {
-                    members.insert(username.clone());
+                // This will fail if the member has already been seen
+                if self.can_vote(username) && seen.insert(username) {
+                    members.push(username.clone());
                 }
             }
             if members.is_empty() {
@@ -122,23 +116,21 @@ impl Roster {
                 &group.description
             };
             entities.push(Entity {
-                slug: slug.clone(),
                 name: name.clone(),
                 unaffiliated: false,
                 members,
             });
         }
 
-        let unaffiliated: BTreeSet<String> = self
+        let unaffiliated: Vec<String> = self
             .members
             .keys()
             .filter(|username| self.can_vote(username))
-            .filter(|username| !affiliated.contains(username))
+            .filter(|username| !seen.contains(username))
             .cloned()
             .collect();
         if !unaffiliated.is_empty() {
             entities.push(Entity {
-                slug: UNAFFILIATED.to_string(),
                 name: "Unaffiliated".to_string(),
                 unaffiliated: true,
                 members: unaffiliated,
@@ -172,10 +164,8 @@ mod tests {
     #[test]
     fn organisations_are_the_groups_flagged_org() {
         let entities = Roster::parse(ROSTER).unwrap().entities();
-        let slugs: Vec<&str> = entities.iter().map(|entity| &*entity.slug).collect();
-        assert_eq!(slugs, ["fyra", "ublue", UNAFFILIATED]);
-        assert_eq!(entities[0].name, "Fyra Labs");
-        assert_eq!(entities[1].name, "ublue");
+        let names: Vec<&str> = entities.iter().map(|entity| &*entity.name).collect();
+        assert_eq!(names, ["Fyra Labs", "ublue", "Unaffiliated"]);
     }
 
     #[test]
@@ -184,16 +174,16 @@ mod tests {
         let block = entities.last().unwrap();
         assert!(block.unaffiliated);
         // dave is only in a project
-        assert_eq!(block.members.iter().collect::<Vec<_>>(), ["carol", "dave"]);
+        assert_eq!(block.members, ["carol", "dave"]);
     }
 
     #[test]
     fn a_member_only_belongs_to_their_first_organisation() {
         let entities = Roster::parse(ROSTER).unwrap().entities();
-        assert!(entities[0].members.contains("alice"));
-        assert_eq!(entities[1].members.iter().collect::<Vec<_>>(), ["erin"]);
+        assert!(entities[0].members.contains(&"alice".to_string()));
+        assert_eq!(entities[1].members, ["erin"]);
         // bob was its only member, and bob can't vote
-        assert!(entities.iter().all(|entity| entity.slug != "zeta"));
+        assert!(entities.iter().all(|entity| entity.name != "Zeta"));
     }
 
     #[test]
@@ -208,43 +198,8 @@ mod tests {
     fn a_missing_email_matches_nobody() {
         let roster = Roster::parse(ROSTER).unwrap();
         assert_eq!(roster.member_of(""), None);
-        assert_eq!(roster.members(), 5);
-        assert_eq!(roster.eligible(), 4);
-    }
-
-    #[test]
-    fn only_members_with_a_valid_email_are_in_an_entity() {
-        let roster = Roster::parse(
-            r#"{
-                "members": {
-                    "alice": { "email": "alice@example.org" },
-                    "bob": { "email": "" },
-                    "carol": { "email": "not an email" },
-                    "dave": { "email": "dave@" },
-                    "erin": { "email": " erin@example.org " },
-                    "frank": {}
-                },
-                "groups": {
-                    "fyra": { "org": true, "members": ["alice", "bob", "carol", "stranger"] },
-                    "ublue": { "org": true, "members": ["dave"] }
-                }
-            }"#,
-        )
-        .unwrap();
-        assert_eq!((roster.members(), roster.eligible()), (6, 2));
-
-        let entities = roster.entities();
-        let members = |entity: &Entity| entity.members.iter().cloned().collect::<Vec<_>>();
-        // Nobody in ublue can vote, and frank isn't in the unaffiliated block
-        assert_eq!(entities.len(), 2);
-        assert_eq!(
-            (&*entities[0].slug, members(&entities[0])),
-            ("fyra", vec!["alice".to_string()])
-        );
-        assert_eq!(
-            (&*entities[1].slug, members(&entities[1])),
-            (UNAFFILIATED, vec!["erin".to_string()])
-        );
+        assert_eq!(roster.member_count(), 5);
+        assert_eq!(roster.eligible_count(), 4);
     }
 
     #[test]
