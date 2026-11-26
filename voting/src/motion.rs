@@ -26,8 +26,7 @@ pub struct Motion {
 }
 
 impl Motion {
-    /// Read the first mail of a thread. The vote stays open as long as the mail says (like
-    /// `open for 24 hours`), or for `window` if it doesn't say
+    /// Read the first mail of a thread and parse data from it
     pub fn read(body: &str, sent: Timestamp, window: SignedDuration) -> Result<Self, MotionError> {
         let mut options: Vec<Choice> = Vec::new();
         for line in body.lines() {
@@ -44,7 +43,7 @@ impl Motion {
         Ok(Self {
             options,
             opens: sent,
-            closes: sent + window_of(&fold(body)).unwrap_or(window),
+            closes: sent + window_of(body).unwrap_or(window),
         })
     }
 
@@ -53,21 +52,14 @@ impl Motion {
     }
 }
 
-/// Lowercase, with each run of whitespace collapsed to one space
-fn fold(text: &str) -> String {
-    text.split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_lowercase()
-}
-
 /// `Option 1: Title`, where the separator can also be `-`, `.` or `)`
 fn option_of(line: &str) -> Option<Choice> {
     let line = line.trim();
-    let rest = line
-        .get(..6)
-        .filter(|word| word.eq_ignore_ascii_case("option"))
-        .map(|_| line[6..].trim_start())?;
+    let word = line.get(..6)?;
+    if !word.eq_ignore_ascii_case("option") {
+        return None;
+    }
+    let rest = line[6..].trim_start();
 
     let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
     let number = rest[..digits].parse().ok()?;
@@ -84,6 +76,11 @@ fn option_of(line: &str) -> Option<Choice> {
 
 /// `open for <n> hours`, or days, or weeks
 fn window_of(text: &str) -> Option<SignedDuration> {
+    let text = text
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase();
     let mut words = text.split("open for ").nth(1)?.split(' ');
     let count: i64 = words.next()?.parse().ok()?;
     let unit = words.next()?;
