@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
-use kairi_config::VotingConfig;
 use poise::serenity_prelude as serenity;
 use tokio::sync::Mutex;
+use voting::Policy;
 
 mod voteconfig;
 mod votes;
 
 pub struct Data {
-    pub rules: VotingConfig,
+    pub rules: Policy,
 }
 
 type SerenityError = Box<dyn std::error::Error + Send + Sync>;

@@ -1,14 +1,49 @@
-//! Reads the vote a member wrote under the cut line of their reply
+//! Reads the votes members wrote under the cut line of their replies
 
-use crate::motion::Motion;
+use std::collections::{BTreeMap, HashMap};
+
+use jiff::Timestamp;
+
+use crate::{motion::Motion, roster::Roster};
 
 /// Start of the cut line, eg: `VOTE BELOW THIS LINE`
 const CUT_LINE: &str = "vote below";
+
+#[derive(Debug, Clone)]
+pub struct Reply {
+    pub author: String,
+    pub sender: Option<String>,
+    pub date: Timestamp,
+    pub url: String,
+    pub body: String,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Vote {
     Abstain,
     Ranked(Vec<u32>),
+}
+
+/// A member's vote
+#[derive(Debug, Clone, PartialEq)]
+pub struct Ballot {
+    pub member: String,
+    pub vote: Vote,
+}
+
+/// A rejected vote
+#[derive(Debug, Clone, PartialEq)]
+pub struct Rejected {
+    pub author: String,
+    pub url: String,
+    pub reason: Reason,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reason {
+    UnknownSender,
+    OutsideWindow,
+    Invalid,
 }
 
 /// Read a vote from a member's reply
@@ -51,6 +86,53 @@ pub fn read(body: &str, motion: &Motion) -> Option<Vote> {
         }
     }
     Some(Vote::Ranked(options))
+}
+
+/// Each member's last valid vote
+pub(crate) fn collect(
+    motion: &Motion,
+    replies: &[Reply],
+    roster: &Roster,
+) -> (HashMap<String, Ballot>, Vec<Rejected>) {
+    let mut replies: Vec<&Reply> = replies.iter().collect();
+    replies.sort_by_key(|reply| reply.date);
+
+    let mut ballots = HashMap::new();
+    let mut invalid: BTreeMap<&str, &Reply> = BTreeMap::new();
+
+    let mut rejected = Vec::new();
+    let mut reject = |reply: &Reply, reason| {
+        rejected.push(Rejected {
+            author: reply.author.clone(),
+            url: reply.url.clone(),
+            reason,
+        })
+    };
+
+    for reply in replies {
+        let member = reply.sender.as_deref().and_then(|s| roster.member_of(s));
+        let open = (motion.opens..=motion.closes).contains(&reply.date);
+        match (member, read(&reply.body, motion)) {
+            (Some(member), Some(vote)) if open => {
+                let member = member.to_string();
+                ballots.insert(member.clone(), Ballot { member, vote });
+            }
+            (Some(member), None) if open => {
+                invalid.entry(member).or_insert(reply);
+            }
+            // Anyone can comment. Only a valid vote outside the window is worth reporting
+            (Some(_), Some(_)) => reject(reply, Reason::OutsideWindow),
+            (None, Some(_)) => reject(reply, Reason::UnknownSender),
+            _ => {}
+        }
+    }
+
+    for (member, reply) in invalid {
+        if !ballots.contains_key(member) {
+            reject(reply, Reason::Invalid);
+        }
+    }
+    (ballots, rejected)
 }
 
 #[cfg(test)]

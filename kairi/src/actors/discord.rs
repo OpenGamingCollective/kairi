@@ -1,15 +1,15 @@
 use std::sync::Arc;
 
-use kairi_config::VotingConfig;
 use kameo::Actor;
 use tokio::task::JoinHandle;
+use voting::Policy;
 
 use crate::platforms::{Data, DiscordBot};
 
 #[derive(Debug, Clone)]
 pub struct DiscordArgs {
     pub token: String,
-    pub rules: VotingConfig,
+    pub rules: Policy,
 }
 pub struct DiscordActor {
     bot: Arc<DiscordBot>,

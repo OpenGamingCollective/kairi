@@ -69,7 +69,7 @@ impl Roster {
         self.members.len()
     }
 
-    /// Number of members with a valid email
+    /// Number of members with an email
     pub fn eligible_count(&self) -> usize {
         self.members
             .values()

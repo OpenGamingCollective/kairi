@@ -1,6 +1,6 @@
 //! `/voteconfig` shows the voting rules
 
-use kairi_config::VotingConfig;
+use voting::Policy;
 
 use super::{SerenityContext, SerenityError};
 
@@ -11,7 +11,7 @@ pub async fn voteconfig(ctx: SerenityContext<'_>) -> Result<(), SerenityError> {
     Ok(())
 }
 
-fn text(config: &VotingConfig) -> String {
+fn text(config: &Policy) -> String {
     format!(
         "**Voting rules**\n```toml\ninternal_quorum = {}\ncoalition_quorum = {}\nwindow_hours = {}\n```",
         config.internal_quorum, config.coalition_quorum, config.window_hours
@@ -25,7 +25,7 @@ mod tests {
     #[test]
     fn the_rules_read_as_the_config_file() {
         assert_eq!(
-            text(&VotingConfig::default()),
+            text(&Policy::default()),
             "**Voting rules**\n```toml\n\
              internal_quorum = 0.5\n\
              coalition_quorum = 0.5\n\

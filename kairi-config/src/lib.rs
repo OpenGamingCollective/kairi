@@ -2,6 +2,7 @@ use std::{fs, path::PathBuf};
 
 use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
+use voting::Policy;
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ConfigFile {
@@ -13,28 +14,13 @@ pub struct ConfigFile {
     pub voting: VotingConfig,
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Default, Deserialize, Serialize, Clone)]
 #[serde(default)]
 pub struct VotingConfig {
     /// Infra inventory JSON
     pub roster_path: Option<PathBuf>,
-    /// Fraction of an organisation's members who must vote for it to count (0 to 1)
-    pub internal_quorum: f64,
-    /// Fraction of the entities that must count for the vote to be valid (0 to 1)
-    pub coalition_quorum: f64,
-    /// Default voting window (if we can get window from mail we use that)
-    pub window_hours: u32,
-}
-
-impl Default for VotingConfig {
-    fn default() -> Self {
-        Self {
-            roster_path: None,
-            internal_quorum: 0.5,
-            coalition_quorum: 0.5,
-            window_hours: 24,
-        }
-    }
+    #[serde(flatten)]
+    pub policy: Policy,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize, Clone)]
@@ -73,23 +59,6 @@ pub struct Config {
     pub typesafe: TypesafeConfig,
     #[serde(default)]
     pub voting: VotingConfig,
-}
-
-impl VotingConfig {
-    pub fn check(&self) -> std::result::Result<(), String> {
-        for (name, quorum) in [
-            ("internal_quorum", self.internal_quorum),
-            ("coalition_quorum", self.coalition_quorum),
-        ] {
-            if !(0.0..=1.0).contains(&quorum) {
-                return Err(format!("{name} must be between 0 and 1, got {quorum}"));
-            }
-        }
-        if self.window_hours == 0 {
-            return Err("window_hours must be above 0".to_string());
-        }
-        Ok(())
-    }
 }
 
 #[derive(Debug, Default, Deserialize, Serialize, Clone)]
@@ -140,7 +109,10 @@ impl Config {
         let mut voting = config_file.voting;
         // `roster_path = ""` leaves it unset
         voting.roster_path = voting.roster_path.filter(|path| !path.is_empty());
-        voting.check().map_err(|error| anyhow!("voting.{error}"))?;
+        voting
+            .policy
+            .check()
+            .map_err(|error| anyhow!("voting.{error}"))?;
 
         Ok(Self {
             discord: DiscordConfig {
@@ -169,9 +141,9 @@ mod tests {
     fn voting_defaults_to_half_quorums_without_a_roster() {
         let voting = Config::build(MINIMAL).unwrap().voting;
         assert_eq!(voting.roster_path, None);
-        assert_eq!(voting.internal_quorum, 0.5);
-        assert_eq!(voting.coalition_quorum, 0.5);
-        assert_eq!(voting.window_hours, 24);
+        assert_eq!(voting.policy.internal_quorum, 0.5);
+        assert_eq!(voting.policy.coalition_quorum, 0.5);
+        assert_eq!(voting.policy.window_hours, 24);
     }
 
     #[test]
@@ -184,8 +156,8 @@ mod tests {
             voting.roster_path,
             Some(PathBuf::from("/run/kairi/roster.json"))
         );
-        assert_eq!(voting.internal_quorum, 0.25);
-        assert_eq!(voting.coalition_quorum, 0.5);
+        assert_eq!(voting.policy.internal_quorum, 0.25);
+        assert_eq!(voting.policy.coalition_quorum, 0.5);
     }
 
     #[test]

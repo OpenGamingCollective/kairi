@@ -1,12 +1,12 @@
 //! Actor that counts the votes on a mailing list thread
 
-use jiff::{SignedDuration, Timestamp};
+use jiff::Timestamp;
 use kairi_config::VotingConfig;
 use kameo::{error::SendError, prelude::*};
 use public_inbox::{MailingListError, Thread};
 use thiserror::Error;
 use tracing::{info, instrument};
-use voting::{MotionError, Policy, Reply, Roster, Tally};
+use voting::{MotionError, Reply, Roster, Tally};
 
 use crate::{
     actors::{
@@ -29,7 +29,6 @@ pub struct VotingArgs {
 #[derive(Debug, Clone)]
 pub struct CountVotes {
     pub list: MailingListEnum,
-    /// The thread's uid, a link to it, or the Message-ID of any mail in it
     pub thread: String,
     pub requested_by: String,
 }
@@ -40,6 +39,7 @@ pub struct Count {
     pub uid: String,
     pub name: String,
     pub url: String,
+    pub roster: Roster,
     pub tally: Tally,
 }
 
@@ -138,12 +138,12 @@ impl Message<CountVotes> for Voting {
             motion.date,
             &replies,
             &roster,
-            &policy(&self.config),
+            &self.config.policy,
             Timestamp::now(),
         )?;
 
         info!(
-            ballots = tally.ballots.len(),
+            ballots = tally.standings.iter().map(|standing| standing.ballots.len()).sum::<usize>(),
             rejected = tally.rejected.len(),
             outcome = ?tally.outcome,
             open = tally.open,
@@ -154,16 +154,9 @@ impl Message<CountVotes> for Voting {
             uid: thread.uid().to_string(),
             name: thread.name().to_string(),
             url: thread.url(),
+            roster,
             tally,
         })
-    }
-}
-
-fn policy(config: &VotingConfig) -> Policy {
-    Policy {
-        internal_quorum: config.internal_quorum,
-        coalition_quorum: config.coalition_quorum,
-        window: SignedDuration::from_hours(config.window_hours.into()),
     }
 }
 

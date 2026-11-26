@@ -171,7 +171,8 @@ fn details(count: &Count) -> serenity::CreateEmbed {
     let title = truncate(&count.name, TITLE);
     let footer = format!(
         "{} members, {} of them can vote",
-        tally.members, tally.eligible
+        count.roster.member_count(),
+        count.roster.eligible_count()
     );
 
     // Long fields spill over into the next one as long as the embed has room
@@ -225,9 +226,9 @@ fn overview(tally: &Tally) -> String {
             _ => None,
         };
         if let Some((number, score)) = leader
-            && round.total > 0.0
+            && tally.total > 0.0
         {
-            let share = percent(score / round.total);
+            let share = percent(score / tally.total);
             let _ = writeln!(
                 text,
                 "Option {number} has **{share}**, more than half is needed"
@@ -238,22 +239,31 @@ fn overview(tally: &Tally) -> String {
     }
 
     let entities = tally.standings.len();
-    // Smallest number of entities that meets the coalition quorum
-    let needed = (tally.coalition_quorum * entities as f64 - 1e-9)
-        .ceil()
-        .max(0.0) as usize;
+    let needed = tally.needed;
     // For auditing: counted ballots, abstentions, then the rest (under quorum or rejected)
     let counted = |abstains: bool| {
-        let is = |ballot: &&Ballot| ballot.counted && (ballot.vote == Vote::Abstain) == abstains;
-        tally.ballots.iter().filter(is).count()
+        let is = |ballot: &&Ballot| (ballot.vote == Vote::Abstain) == abstains;
+        let counting = tally
+            .standings
+            .iter()
+            .filter(|standing| standing.passed_quorum);
+        counting
+            .flat_map(|standing| &standing.ballots)
+            .filter(is)
+            .count()
     };
     let (valid, abstained) = (counted(false), counted(true));
-    let left_out = tally.ballots.len() - valid - abstained + tally.rejected.len();
+    let cast: usize = tally
+        .standings
+        .iter()
+        .map(|standing| standing.ballots.len())
+        .sum();
+    let left_out = cast - valid - abstained + tally.rejected.len();
     let _ = write!(
         text,
         "Quorum: **{}** of **{entities}** organisations, **{needed}** needed\n\
          **{valid}** valid {}, **{abstained}** abstained, **{left_out}** not counted",
-        tally.counting(),
+        tally.counting,
         plural(valid, "vote", "votes"),
     );
     text
@@ -298,8 +308,8 @@ fn headline(tally: &Tally) -> String {
 /// `round` is the final round. Options eliminated earlier show the round they went out in
 fn rows(tally: &Tally, round: &Round) -> Vec<(String, Row)> {
     let share = |weight: f64| {
-        if round.total > 0.0 {
-            weight / round.total
+        if tally.total > 0.0 {
+            weight / tally.total
         } else {
             0.0
         }
@@ -323,7 +333,7 @@ fn rows(tally: &Tally, round: &Round) -> Vec<(String, Row)> {
             Some((format!("Option {}", option.number), row))
         })
         .collect();
-    let exhausted = share(round.total - round.voted());
+    let exhausted = share(tally.total - round.voted());
     if exhausted >= 0.0005 {
         rows.push(("No option left".to_string(), Row::Share(exhausted)));
     }
@@ -359,7 +369,7 @@ fn fields(tally: &Tally) -> Vec<Field> {
         fields.push(("Runoff".to_string(), rounds(tally), false));
     }
 
-    fields.extend(tally.standings.iter().map(|standing| card(tally, standing)));
+    fields.extend(tally.standings.iter().map(card));
 
     if !tally.rejected.is_empty() {
         let name = format!("Not counted ({})", tally.rejected.len());
@@ -377,25 +387,25 @@ fn fields(tally: &Tally) -> Vec<Field> {
 }
 
 /// An organisation's turnout, weight and votes
-fn card(tally: &Tally, standing: &Standing) -> Field {
-    let mark = if standing.counts { "✅" } else { "❌" };
-    let turnout = format!("{}/{} voted", standing.voted, standing.roster);
-    let mut lines = vec![if standing.counts {
+fn card(standing: &Standing) -> Field {
+    let mark = if standing.passed_quorum { "✅" } else { "❌" };
+    let turnout = format!(
+        "{}/{} voted",
+        standing.ballots.len(),
+        standing.entity.members.len()
+    );
+    let mut lines = vec![if standing.passed_quorum {
         format!("{turnout}, {} of the vote", percent(standing.weight))
-    } else if standing.voted > 0 {
+    } else if !standing.ballots.is_empty() {
         format!("{turnout}, under quorum")
     } else {
         turnout
     }];
 
-    let cast: Vec<&Ballot> = tally
-        .ballots
-        .iter()
-        .filter(|ballot| standing.voters.contains(&ballot.member))
-        .collect();
+    let cast = &standing.ballots;
     // Same order as the motion, with abstentions last
     let mut votes: Vec<&Vote> = Vec::new();
-    for ballot in &cast {
+    for ballot in cast {
         if !votes.contains(&&ballot.vote) {
             votes.push(&ballot.vote);
         }
@@ -420,16 +430,17 @@ fn card(tally: &Tally, standing: &Standing) -> Field {
             .collect();
         lines.push(format!("**{label}**: {}", members.join(", ")));
     }
-    (format!("{mark} {}", standing.name), lines, true)
+    (format!("{mark} {}", standing.entity.name), lines, true)
 }
 
 /// Every runoff round: each option's score and ballots (`+` marks a ballot that just moved
 /// there)
 fn rounds(tally: &Tally) -> Vec<String> {
     let ballots: Vec<(&str, &[u32])> = tally
-        .ballots
+        .standings
         .iter()
-        .filter(|ballot| ballot.counted)
+        .filter(|standing| standing.passed_quorum)
+        .flat_map(|standing| &standing.ballots)
         .filter_map(|ballot| match &ballot.vote {
             Vote::Ranked(options) => Some((ballot.member.as_str(), options.as_slice())),
             Vote::Abstain => None,
@@ -465,8 +476,8 @@ fn rounds(tally: &Tally) -> Vec<String> {
         lines.push(line);
 
         for (number, score) in &round.scores {
-            let share = if round.total > 0.0 {
-                score / round.total
+            let share = if tally.total > 0.0 {
+                score / tally.total
             } else {
                 0.0
             };
