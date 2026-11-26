@@ -1,13 +1,9 @@
-//! What's being voted on, read from the mail that opens the thread
+//! What exactly we are voting for.
+//!
+//! Motion is apparently the parliament term for a formal proposal.
 
 use chrono::{DateTime, TimeDelta, Utc};
 use thiserror::Error;
-
-/// Start of the cut line, as in `VOTE BELOW THIS LINE`
-const CUT_LINE: &str = "vote below";
-
-/// Lines of the first mail shorter than this could be votes, so they don't mark a quote
-const QUOTE_LENGTH: usize = 25;
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum MotionError {
@@ -27,10 +23,6 @@ pub struct Motion {
     pub options: Vec<Choice>,
     pub opens: DateTime<Utc>,
     pub closes: DateTime<Utc>,
-    /// The cut line, normalised
-    pub(crate) cut_line: Option<String>,
-    /// The body, normalised, to spot it when it's quoted without `>`
-    text: String,
 }
 
 impl Motion {
@@ -49,31 +41,20 @@ impl Motion {
             return Err(MotionError::NoOptions);
         }
 
-        let text = fold(body);
-        let cut_line = body.lines().map(fold).find(|line| line.contains(CUT_LINE));
-
         Ok(Self {
             options,
             opens: sent,
-            closes: sent + window_of(&text).unwrap_or(window),
-            cut_line,
-            text,
+            closes: sent + window_of(&fold(body)).unwrap_or(window),
         })
     }
 
     pub fn option(&self, number: u32) -> Option<&Choice> {
         self.options.iter().find(|option| option.number == number)
     }
-
-    /// Whether a line in a reply is one of the first mail's long lines
-    pub(crate) fn quotes(&self, line: &str) -> bool {
-        let line = fold(line);
-        line.len() >= QUOTE_LENGTH && self.text.contains(&line)
-    }
 }
 
 /// Lowercase, with each run of whitespace collapsed to one space
-pub(crate) fn fold(text: &str) -> String {
+fn fold(text: &str) -> String {
     text.split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
@@ -210,26 +191,5 @@ pub(crate) mod tests {
 
         let unreadable = read("open for a while, open for 0 hours\nOption 1: a\nOption 2: b");
         assert_eq!(unreadable.closes - sent(), TimeDelta::hours(48));
-    }
-
-    #[test]
-    fn the_cut_line_is_found() {
-        assert_eq!(
-            motion(MAIL).cut_line.as_deref(),
-            Some("vote below this line")
-        );
-        assert!(motion("Option 1: a\nOption 2: b").cut_line.is_none());
-    }
-
-    #[test]
-    fn long_lines_of_the_mail_are_recognised() {
-        let motion = motion(MAIL);
-        assert!(
-            motion.quotes("  organization going forward.   Two proposals have been put forward.")
-        );
-        assert!(motion.quotes("OPTION 2: Size Scaled and Equal Distribution Model"));
-        // Could be a vote
-        assert!(!motion.quotes("Option 1"));
-        assert!(!motion.quotes("I'd rather have something else entirely"));
     }
 }

@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use kairi_config::VotingConfig;
 use kameo::{Actor, actor::ActorRef};
 use tokio::task::JoinHandle;
 
@@ -13,8 +14,7 @@ pub struct DiscordArgs {
     pub token: String,
     pub voting: ActorRef<Voting>,
     pub reader: ActorRef<PublicInboxReader>,
-    /// When false, `/voteconfig` only shows the voting rules
-    pub rule_changes: bool,
+    pub rules: VotingConfig,
 }
 pub struct DiscordActor {
     bot: Arc<DiscordBot>,
@@ -39,8 +39,8 @@ impl Actor for DiscordActor {
                 Data {
                     voting: args.voting,
                     reader: args.reader,
+                    rules: args.rules,
                 },
-                args.rule_changes,
             )
             .await?,
         );

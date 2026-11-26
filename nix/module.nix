@@ -25,11 +25,6 @@
           internal_quorum = cfg.settings.voting.internalQuorum;
           coalition_quorum = cfg.settings.voting.coalitionQuorum;
           window_hours = cfg.settings.voting.windowHours;
-          unaffiliated_weight = cfg.settings.voting.unaffiliatedWeight;
-          abstentions = cfg.settings.voting.abstentions;
-          exhausted_ballots = cfg.settings.voting.exhaustedBallots;
-          last_two_options = cfg.settings.voting.lastTwoOptions;
-          rule_changes = cfg.settings.voting.ruleChanges;
         };
       };
 
@@ -155,56 +150,6 @@
                       type = lib.types.ints.positive;
                       default = 24;
                       description = "How long a vote lasts when its first mail doesn't say";
-                    };
-                    unaffiliatedWeight = lib.mkOption {
-                      type = lib.types.enum [
-                        "voters"
-                        "roster"
-                      ];
-                      default = "voters";
-                      description = "Size of the unaffiliated block";
-                    };
-                    abstentions = lib.mkOption {
-                      type = lib.types.enum [
-                        "counted"
-                        "quorum_only"
-                        "ignored"
-                      ];
-                      default = "counted";
-                      description = ''
-                        Whether the weight of a member who abstains is part of what an option needs
-                        more than half of, only counts for the quorum, or is ignored
-                      '';
-                    };
-                    exhaustedBallots = lib.mkOption {
-                      type = lib.types.enum [
-                        "counted"
-                        "dropped"
-                      ];
-                      default = "counted";
-                      description = ''
-                        Whether a ballot stays part of what an option needs more than half of once
-                        every option it ranked is out of the runoff
-                      '';
-                    };
-                    lastTwoOptions = lib.mkOption {
-                      type = lib.types.enum [
-                        "runoff"
-                        "final"
-                      ];
-                      default = "runoff";
-                      description = ''
-                        Whether the weaker of the last two options of a runoff is still eliminated,
-                        its ballots passing the other, or the count stops there without a majority
-                      '';
-                    };
-                    ruleChanges = lib.mkOption {
-                      type = lib.types.bool;
-                      default = false;
-                      description = ''
-                        Whether `/voteconfig` can change the voting rules until the bot restarts, for
-                        a test bot. It only shows them otherwise
-                      '';
                     };
                   };
                 };

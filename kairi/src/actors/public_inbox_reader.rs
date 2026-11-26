@@ -35,7 +35,6 @@ pub struct FetchThread {
 pub struct FindThread {
     pub list: MailingListEnum,
     pub message_id: String,
-    /// Who's asking, for the logs
     pub requested_by: String,
 }
 
@@ -44,7 +43,6 @@ pub struct FindThread {
 pub struct FetchMessages {
     pub list: MailingListEnum,
     pub mails: Vec<Mail>,
-    /// Who's asking, for the logs
     pub requested_by: String,
 }
 

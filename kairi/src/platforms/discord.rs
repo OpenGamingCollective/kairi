@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use kairi_config::VotingConfig;
 use kameo::actor::ActorRef;
 use poise::serenity_prelude as serenity;
 use tokio::sync::Mutex;
@@ -9,10 +10,10 @@ use crate::actors::{PublicInboxReader, Voting};
 mod voteconfig;
 mod votes;
 
-/// The actors the commands talk to
 pub struct Data {
     pub voting: ActorRef<Voting>,
     pub reader: ActorRef<PublicInboxReader>,
+    pub rules: VotingConfig,
 }
 
 type SerenityError = Box<dyn std::error::Error + Send + Sync>;
@@ -25,13 +26,12 @@ pub struct DiscordBot {
 }
 
 impl DiscordBot {
-    /// `rule_changes`: when false, `/voteconfig` only shows the voting rules
-    pub async fn build(token: &str, data: Data, rule_changes: bool) -> anyhow::Result<Self> {
+    pub async fn build(token: &str, data: Data) -> anyhow::Result<Self> {
         let intents = serenity::GatewayIntents::all();
 
         let framework = poise::Framework::<Data, SerenityError>::builder()
             .options(poise::FrameworkOptions {
-                commands: vec![ping(), votes::votes(), voteconfig::command(rule_changes)],
+                commands: vec![ping(), votes::votes(), voteconfig::voteconfig()],
                 event_handler: |framework, event| {
                     Box::pin(votes::on_event(
                         framework.serenity_context,

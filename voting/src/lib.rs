@@ -4,10 +4,7 @@ mod motion;
 mod roster;
 mod tally;
 
-pub use ballot::{Reading, Vote, read as read_ballot};
+pub use ballot::{Vote, read as read_ballot};
 pub use motion::{Choice, Motion, MotionError};
 pub use roster::{Entity, Roster, UNAFFILIATED};
-pub use tally::{
-    Abstentions, Ballot, BlockWeight, Exhausted, LastTwo, Outcome, Policy, Reason, Rejected, Reply,
-    Round, Standing, Tally, tally,
-};
+pub use tally::{Ballot, Outcome, Policy, Reason, Rejected, Reply, Round, Standing, Tally, tally};

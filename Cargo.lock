@@ -2296,7 +2296,6 @@ dependencies = [
  "anyhow",
  "serde",
  "toml",
- "voting",
 ]
 
 [[package]]

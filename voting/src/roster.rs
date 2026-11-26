@@ -20,7 +20,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Deserialize;
 
-/// Slug of the unaffiliated block
 pub const UNAFFILIATED: &str = "unaffiliated";
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -89,7 +88,6 @@ impl Roster {
         self.members.get(username).is_some_and(Member::can_vote)
     }
 
-    /// Username of the member with this address
     pub fn member_of(&self, email: &str) -> Option<&str> {
         let email = email.trim();
         if email.is_empty() {

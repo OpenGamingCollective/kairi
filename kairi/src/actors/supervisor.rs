@@ -89,7 +89,7 @@ impl Actor for Kairi {
         let discord = DiscordActor::supervise(
             &actor_ref,
             DiscordArgs {
-                rule_changes: args.config.voting.rule_changes,
+                rules: args.config.voting.clone(),
                 token: args.config.discord.token,
                 voting: voting.clone(),
                 reader: public_inbox_reader.clone(),
