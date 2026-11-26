@@ -2271,8 +2271,8 @@ name = "kairi"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "chrono",
  "clap",
+ "jiff",
  "kairi-config",
  "kameo",
  "kameo_actors",
@@ -2653,9 +2653,9 @@ dependencies = [
 name = "public-inbox"
 version = "0.1.0"
 dependencies = [
- "chrono",
  "flate2",
  "gix",
+ "jiff",
  "mail-parser",
  "reqwest 0.13.5",
  "serde",
@@ -4010,7 +4010,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 name = "voting"
 version = "0.1.0"
 dependencies = [
- "chrono",
+ "jiff",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

@@ -26,7 +26,7 @@ use crate::{
     motion::{Motion, MotionError},
     roster::Roster,
 };
-use chrono::{DateTime, TimeDelta, Utc};
+use jiff::{SignedDuration, Timestamp};
 
 /// Scores closer than this are tied
 const EPSILON: f64 = 1e-9;
@@ -38,7 +38,7 @@ pub struct Policy {
     /// Fraction of the entities that must count for the vote to be valid (0 to 1)
     pub coalition_quorum: f64,
     /// How long a vote stays open if its first mail doesn't say
-    pub window: TimeDelta,
+    pub window: SignedDuration,
 }
 
 impl Default for Policy {
@@ -46,7 +46,7 @@ impl Default for Policy {
         Self {
             internal_quorum: 0.5,
             coalition_quorum: 0.5,
-            window: TimeDelta::hours(24),
+            window: SignedDuration::from_hours(24),
         }
     }
 }
@@ -57,7 +57,7 @@ pub struct Reply {
     pub author: String,
     /// Sender address
     pub sender: Option<String>,
-    pub date: DateTime<Utc>,
+    pub date: Timestamp,
     pub url: String,
     pub body: String,
 }
@@ -168,11 +168,11 @@ impl Tally {
 /// Count the votes on a thread as of `now`. `mail` is the first mail's body, `replies` the rest
 pub fn tally(
     mail: &str,
-    sent: DateTime<Utc>,
+    sent: Timestamp,
     replies: &[Reply],
     roster: &Roster,
     policy: &Policy,
-    now: DateTime<Utc>,
+    now: Timestamp,
 ) -> Result<Tally, MotionError> {
     let motion = Motion::read(mail, sent, policy.window)?;
     let (ballots, rejected) = collect(&motion, replies, roster);
@@ -444,14 +444,14 @@ mod tests {
         Reply {
             author: member.to_string(),
             sender: Some(format!("{member}@example.org")),
-            date: sent() + TimeDelta::hours(hours),
+            date: sent() + SignedDuration::from_hours(hours),
             url: format!("https://l/{member}/{hours}/"),
             body: format!("VOTE BELOW THIS LINE\n{body}"),
         }
     }
 
     fn count_with(mail: &str, replies: &[Reply], policy: &Policy) -> Tally {
-        let now = sent() + TimeDelta::days(7);
+        let now = sent() + SignedDuration::from_hours(7 * 24);
         tally(mail, sent(), replies, &roster(), policy, now).unwrap()
     }
 
@@ -683,14 +683,14 @@ mod tests {
         let on_time = [reply("duo1", 24, "Option 1"), reply("free1", 0, "Option 1")];
         assert_eq!(count(&on_time).ballots.len(), 2);
 
-        let now = sent() + TimeDelta::hours(23);
+        let now = sent() + SignedDuration::from_hours(23);
         let open = tally(MAIL, sent(), &[], &roster(), &Policy::default(), now).unwrap();
         assert!(open.open);
         assert!(!count(&[]).open);
 
         // The mail doesn't say
         let long = Policy {
-            window: TimeDelta::hours(72),
+            window: SignedDuration::from_hours(72),
             ..Policy::default()
         };
         let late = [reply("duo1", 48, "Option 1 > Option 2")];

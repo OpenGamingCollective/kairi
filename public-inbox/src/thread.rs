@@ -1,7 +1,7 @@
 //! Threading of the mails of a mailing list
 use std::collections::HashMap;
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -44,7 +44,7 @@ impl Thread {
         &self.root().author
     }
 
-    pub fn date(&self) -> DateTime<Utc> {
+    pub fn date(&self) -> Timestamp {
         self.root().date
     }
 
@@ -69,7 +69,7 @@ pub struct ThreadSummary {
     pub uid: String,
     pub name: String,
     pub author: String,
-    pub date: DateTime<Utc>,
+    pub date: Timestamp,
     pub url: String,
     pub mails: usize,
 }
@@ -199,7 +199,7 @@ mod tests {
             subject: format!("subject of {id}"),
             author: "alice".to_string(),
             sender: None,
-            date: DateTime::default(),
+            date: Timestamp::UNIX_EPOCH,
             url: format!("https://l/list/{id}/"),
             epoch: 0,
             blob: ObjectId::null(gix::hash::Kind::Sha1),

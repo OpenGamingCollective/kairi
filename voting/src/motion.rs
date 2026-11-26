@@ -2,7 +2,7 @@
 //!
 //! Motion is apparently the parliament term for a formal proposal.
 
-use chrono::{DateTime, TimeDelta, Utc};
+use jiff::{SignedDuration, Timestamp};
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -21,14 +21,14 @@ pub struct Choice {
 #[derive(Debug, Clone)]
 pub struct Motion {
     pub options: Vec<Choice>,
-    pub opens: DateTime<Utc>,
-    pub closes: DateTime<Utc>,
+    pub opens: Timestamp,
+    pub closes: Timestamp,
 }
 
 impl Motion {
     /// Read the first mail of a thread. The vote stays open as long as the mail says (like
     /// `open for 24 hours`), or for `window` if it doesn't say
-    pub fn read(body: &str, sent: DateTime<Utc>, window: TimeDelta) -> Result<Self, MotionError> {
+    pub fn read(body: &str, sent: Timestamp, window: SignedDuration) -> Result<Self, MotionError> {
         let mut options: Vec<Choice> = Vec::new();
         for line in body.lines() {
             if let Some(option) = option_of(line)
@@ -83,7 +83,7 @@ fn option_of(line: &str) -> Option<Choice> {
 }
 
 /// `open for <n> hours`, or days, or weeks
-fn window_of(text: &str) -> Option<TimeDelta> {
+fn window_of(text: &str) -> Option<SignedDuration> {
     let mut words = text.split("open for ").nth(1)?.split(' ');
     let count: i64 = words.next()?.parse().ok()?;
     let unit = words.next()?;
@@ -97,7 +97,7 @@ fn window_of(text: &str) -> Option<TimeDelta> {
     } else {
         return None;
     };
-    TimeDelta::try_hours(count.checked_mul(hours)?).filter(|window| *window > TimeDelta::zero())
+    SignedDuration::try_from_hours(count.checked_mul(hours)?).filter(SignedDuration::is_positive)
 }
 
 #[cfg(test)]
@@ -127,12 +127,12 @@ pub(crate) mod tests {
         VOTE BELOW THIS LINE\n\
         ---\n";
 
-    pub fn sent() -> DateTime<Utc> {
+    pub fn sent() -> Timestamp {
         "2026-09-11T23:47:36Z".parse().unwrap()
     }
 
     pub fn motion(body: &str) -> Motion {
-        Motion::read(body, sent(), TimeDelta::hours(24)).unwrap()
+        Motion::read(body, sent(), SignedDuration::from_hours(24)).unwrap()
     }
 
     #[test]
@@ -166,7 +166,7 @@ pub(crate) mod tests {
 
     #[test]
     fn a_mail_without_two_options_is_not_a_vote() {
-        let read = |body| Motion::read(body, sent(), TimeDelta::hours(24)).map(|_| ());
+        let read = |body| Motion::read(body, sent(), SignedDuration::from_hours(24)).map(|_| ());
         assert_eq!(read("hello"), Err(MotionError::NoOptions));
         assert_eq!(read("Option 1: alone"), Err(MotionError::NoOptions));
         assert_eq!(
@@ -177,19 +177,31 @@ pub(crate) mod tests {
 
     #[test]
     fn the_vote_lasts_what_the_mail_says() {
-        assert_eq!(motion(MAIL).closes - sent(), TimeDelta::hours(24));
+        assert_eq!(
+            motion(MAIL).closes.duration_since(sent()),
+            SignedDuration::from_hours(24)
+        );
 
         let days = motion("Voting is OPEN  for 3\ndays.\nOption 1: a\nOption 2: b");
-        assert_eq!(days.closes - sent(), TimeDelta::days(3));
+        assert_eq!(
+            days.closes.duration_since(sent()),
+            SignedDuration::from_hours(3 * 24)
+        );
     }
 
     #[test]
     fn the_vote_lasts_the_default_window_otherwise() {
-        let read = |body| Motion::read(body, sent(), TimeDelta::hours(48)).unwrap();
+        let read = |body| Motion::read(body, sent(), SignedDuration::from_hours(48)).unwrap();
         let unsaid = read("Option 1: a\nOption 2: b");
-        assert_eq!(unsaid.closes - sent(), TimeDelta::hours(48));
+        assert_eq!(
+            unsaid.closes.duration_since(sent()),
+            SignedDuration::from_hours(48)
+        );
 
         let unreadable = read("open for a while, open for 0 hours\nOption 1: a\nOption 2: b");
-        assert_eq!(unreadable.closes - sent(), TimeDelta::hours(48));
+        assert_eq!(
+            unreadable.closes.duration_since(sent()),
+            SignedDuration::from_hours(48)
+        );
     }
 }

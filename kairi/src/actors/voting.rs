@@ -1,6 +1,6 @@
 //! Actor that counts the votes on a mailing list thread
 
-use chrono::{TimeDelta, Utc};
+use jiff::{SignedDuration, Timestamp};
 use kairi_config::VotingConfig;
 use kameo::{error::SendError, prelude::*};
 use public_inbox::{MailingListError, Thread};
@@ -139,7 +139,7 @@ impl Message<CountVotes> for Voting {
             &replies,
             &roster,
             &policy(&self.config),
-            Utc::now(),
+            Timestamp::now(),
         )?;
 
         info!(
@@ -163,7 +163,7 @@ fn policy(config: &VotingConfig) -> Policy {
     Policy {
         internal_quorum: config.internal_quorum,
         coalition_quorum: config.coalition_quorum,
-        window: TimeDelta::hours(config.window_hours.into()),
+        window: SignedDuration::from_hours(config.window_hours.into()),
     }
 }
 

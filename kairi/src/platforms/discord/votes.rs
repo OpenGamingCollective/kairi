@@ -141,7 +141,7 @@ async fn threads(ctx: SerenityContext<'_>, partial: &str) -> serenity::CreateAut
         .filter(|thread| thread.name.to_lowercase().contains(&partial))
         .take(CHOICES)
         .map(|thread| {
-            let name = format!("{} ({})", thread.name, thread.date.format("%Y-%m-%d"));
+            let name = format!("{} ({})", thread.name, thread.date.strftime("%Y-%m-%d"));
             serenity::AutocompleteChoice::new(truncate(&name, CHOICE), thread.uid.clone())
         })
         .collect();
@@ -284,7 +284,7 @@ fn headline(tally: &Tally) -> String {
         Outcome::NoVotes => "**No votes** for any option".to_string(),
     };
 
-    let closes = tally.motion.closes.timestamp();
+    let closes = tally.motion.closes.as_second();
     let window = if tally.open {
         format!("Open until <t:{closes}:f>, <t:{closes}:R>, the count can still change")
     } else {
@@ -522,7 +522,7 @@ fn truncate(text: &str, limit: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use chrono::{DateTime, TimeDelta, Utc};
+    use jiff::{SignedDuration, Timestamp};
     use voting::{Policy, Reply, Roster};
 
     use super::*;
@@ -530,7 +530,7 @@ mod tests {
     const MAIL: &str = "Option 1: Square roots\nOption 2: Equal shares\nVOTE BELOW THIS LINE\n";
     const THREE: &str = "Option 1: a\nOption 2: b\nOption 3: c\n";
 
-    fn sent() -> DateTime<Utc> {
+    fn sent() -> Timestamp {
         "2026-09-11T23:47:36Z".parse().unwrap()
     }
 
@@ -561,14 +561,14 @@ mod tests {
         Reply {
             author: author.to_string(),
             sender: Some(format!("{author}@example.org")),
-            date: sent() + TimeDelta::hours(1),
+            date: sent() + SignedDuration::from_hours(1),
             url: format!("https://l/{author}/"),
             body: format!("VOTE BELOW THIS LINE\n{body}"),
         }
     }
 
     fn count_of(mail: &str, replies: &[Reply], hours: i64) -> Tally {
-        let now = sent() + TimeDelta::hours(hours);
+        let now = sent() + SignedDuration::from_hours(hours);
         voting::tally(mail, sent(), replies, &roster(), &Policy::default(), now).unwrap()
     }
 

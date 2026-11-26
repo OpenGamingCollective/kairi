@@ -2,8 +2,8 @@
 
 use std::{fmt::Write, sync::LazyLock};
 
-use chrono::{DateTime, Utc};
 use gix::ObjectId;
+use jiff::Timestamp;
 use mail_parser::{HeaderForm, Message, MessageParser};
 use serde::{Deserialize, Serialize};
 
@@ -29,7 +29,7 @@ pub struct Mail {
     pub subject: String,
     pub author: String,
     pub sender: Option<String>,
-    pub date: DateTime<Utc>,
+    pub date: Timestamp,
     pub url: String,
     pub(crate) epoch: u32,
     pub(crate) blob: ObjectId,
@@ -58,8 +58,8 @@ pub(crate) fn index(
 
     let date = message
         .date()
-        .and_then(|date| DateTime::from_timestamp(date.to_timestamp(), 0))
-        .or_else(|| DateTime::from_timestamp(commit_time, 0))
+        .and_then(|date| Timestamp::from_second(date.to_timestamp()).ok())
+        .or_else(|| Timestamp::from_second(commit_time).ok())
         .unwrap_or_default();
 
     Some(Mail {
@@ -151,7 +151,7 @@ mod tests {
         assert_eq!(mail.subject, "hello");
         assert_eq!(mail.author, "Alice");
         assert_eq!(mail.sender.as_deref(), Some("alice@lists.example.org"));
-        assert_eq!(mail.date.timestamp(), 1_637_446_921);
+        assert_eq!(mail.date.as_second(), 1_637_446_921);
         assert_eq!(mail.url, "https://l/list/2@example.org/");
         assert_eq!(
             mail.parents,
@@ -162,7 +162,7 @@ mod tests {
     #[test]
     fn unparsable_date_falls_back_to_the_commit_time() {
         let mail = index_raw(b"Message-ID: <a@b>\r\nDate: garbage\r\n\r\nbody", 42);
-        assert_eq!(mail.unwrap().date.timestamp(), 42);
+        assert_eq!(mail.unwrap().date.as_second(), 42);
     }
 
     #[test]
