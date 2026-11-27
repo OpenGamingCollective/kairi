@@ -1,37 +1,25 @@
 //! `/votes` shows a summary of a mailing list vote, with a button to see who voted what
 
-use std::fmt::Write;
+use std::{collections::BTreeMap, fmt::Write};
 
 use kameo::error::SendError;
-use poise::serenity_prelude as serenity;
-use strum::VariantArray;
-use voting::{Ballot, Outcome, Reason, Round, Standing, Tally, Vote};
+use poise::{ChoiceParameter, serenity_prelude as serenity};
+use voting::{Outcome, Reason, Round, Standing, Tally, Vote};
 
-use super::{SerenityContext, SerenityError};
+use super::{CHOICE, CHOICES, FIELD, FIELDS, SerenityContext, SerenityError, TITLE};
 use crate::{
     actors::{Count, CountVotes, FetchList, reader, voting},
     types::MailingListEnum,
 };
 
-/// Discord's limits
-const TITLE: usize = 256;
-const FIELD: usize = 1024;
-const FIELDS: usize = 25;
-const EMBED: usize = 6000;
-const CHOICE: usize = 100;
-const CHOICES: usize = 25;
-
-const GREEN: u32 = 0x2e_cc_71;
-const ORANGE: u32 = 0xe6_7e_22;
-const RED: u32 = 0xe7_4c_3c;
-
 /// Prefix of the details button's id, which looks like `votes:<list>:<uid>`
 const DETAILS: &str = "votes";
 
-const BAR: usize = 12;
-
-/// An embed field as (name, lines, inline)
-type Field = (String, Vec<String>, bool);
+struct Field {
+    name: String,
+    lines: Vec<String>,
+    inline: bool,
+}
 
 /// Count the votes on a mailing list thread
 #[poise::command(slash_command)]
@@ -42,7 +30,6 @@ pub async fn votes(
     thread: String,
     #[description = "List the thread is on, governance by default"] list: Option<MailingListEnum>,
 ) -> Result<(), SerenityError> {
-    // Reading the mails can take longer than Discord is willing to wait
     ctx.defer().await?;
 
     let count = CountVotes {
@@ -67,7 +54,7 @@ pub async fn votes(
     Ok(())
 }
 
-/// Reply to the details button, only to whoever pressed it. The id carries the thread, so it outlives a restart
+/// Reply to the details button
 pub async fn on_event(
     ctx: &serenity::Context,
     event: &serenity::FullEvent,
@@ -111,15 +98,11 @@ fn details_id(count: &Count) -> String {
 }
 
 fn parse_details_id(id: &str) -> Option<(MailingListEnum, String)> {
-    let mut parts = id.split(':');
-    if parts.next()? != DETAILS {
-        return None;
-    }
-    let list = parts.next()?;
-    let list = MailingListEnum::VARIANTS
-        .iter()
-        .find(|variant| variant.to_string() == list)?;
-    Some((*list, parts.next()?.to_string()))
+    let (list, uid) = id
+        .strip_prefix(DETAILS)?
+        .strip_prefix(':')?
+        .split_once(':')?;
+    Some((MailingListEnum::from_name(list)?, uid.to_string()))
 }
 
 /// Governance threads, newest first
@@ -148,15 +131,15 @@ async fn threads(ctx: SerenityContext<'_>, partial: &str) -> serenity::CreateAut
     serenity::CreateAutocompleteResponse::new().set_choices(choices)
 }
 
-fn colour(tally: &Tally) -> u32 {
+fn colour(tally: &Tally) -> serenity::Colour {
     match tally.outcome {
-        _ if tally.open => ORANGE,
-        Outcome::Passed(_) => GREEN,
-        Outcome::NoMajority | Outcome::Tied | Outcome::Void => RED,
+        _ if tally.open => serenity::Colour::ORANGE,
+        Outcome::Passed(_) => serenity::colours::roles::GREEN,
+        Outcome::NoMajority | Outcome::Tied | Outcome::Void => serenity::Colour::RED,
     }
 }
 
-/// The outcome and each option's score
+/// Vote result summary embed
 fn summary(count: &Count) -> serenity::CreateEmbed {
     serenity::CreateEmbed::new()
         .title(truncate(count.thread.name(), TITLE))
@@ -165,28 +148,34 @@ fn summary(count: &Count) -> serenity::CreateEmbed {
         .colour(colour(&count.tally))
 }
 
-/// Who voted for what in each organisation, plus anything that wasn't counted
+/// Vote details and breakdown embed
 fn details(count: &Count) -> serenity::CreateEmbed {
     let tally = &count.tally;
     let title = truncate(count.thread.name(), TITLE);
     let footer = format!(
-        "{} members, {} of them can vote",
-        count.roster.member_count(),
-        count.roster.eligible_count()
+        "{} out of {} members eligible for voting",
+        count.roster.eligible_count(),
+        count.roster.member_count()
     );
 
     // Long fields spill over into the next one as long as the embed has room
     let size = |text: &str| text.chars().count();
-    let mut room = EMBED.saturating_sub(size(&title) + size(&footer));
+    let mut room = serenity::EMBED_MAX_LENGTH.saturating_sub(size(&title) + size(&footer));
     let fields: Vec<(String, String, bool)> = fields(tally)
         .into_iter()
-        .flat_map(|(name, lines, inline)| {
-            let texts = chunks(&lines, FIELD).into_iter().enumerate();
-            texts.map(move |(position, text)| match position {
-                0 => (name.clone(), text, inline),
-                _ => (format!("{name}, continued"), text, inline),
-            })
-        })
+        .flat_map(
+            |Field {
+                 name,
+                 lines,
+                 inline,
+             }| {
+                let texts = chunks(&lines, FIELD).into_iter().enumerate();
+                texts.map(move |(position, text)| match position {
+                    0 => (name.clone(), text, inline),
+                    _ => (format!("{name}, continued"), text, inline),
+                })
+            },
+        )
         .take(FIELDS)
         .take_while(|(name, text, _)| {
             let fits = size(name) + size(text) <= room;
@@ -209,7 +198,7 @@ fn overview(tally: &Tally) -> String {
     let mut text = headline(tally);
 
     if let Some(round) = tally.rounds.last() {
-        let _ = write!(text, "\n```\n{}\n```", bars(&rows(tally, round)).join("\n"));
+        let _ = write!(text, "\n```\n{}\n```", chart(tally, round));
         let _ = writeln!(
             text,
             "Share of the weight of the organisations that reached quorum"
@@ -241,31 +230,20 @@ fn overview(tally: &Tally) -> String {
     let entities = tally.standings.len();
     let needed = tally.needed;
     // For auditing: counted ballots, abstentions, then the rest (under quorum or rejected)
-    let counted = |abstains: bool| {
-        let is = |ballot: &&Ballot| (ballot.vote == Vote::Abstain) == abstains;
-        let counting = tally
-            .standings
-            .iter()
-            .filter(|standing| standing.passed_quorum);
-        counting
-            .flat_map(|standing| &standing.ballots)
-            .filter(is)
-            .count()
-    };
-    let (valid, abstained) = (counted(false), counted(true));
+    let abstained = tally
+        .ballots()
+        .filter(|ballot| ballot.vote == Vote::Abstain)
+        .count();
+    let valid = tally.ballots().count() - abstained;
     let left_out = tally.cast() - valid - abstained + tally.rejected.len();
     let _ = write!(
         text,
         "Quorum: **{}** of **{entities}** organisations, **{needed}** needed\n\
          **{valid}** valid {}, **{abstained}** abstained, **{left_out}** not counted",
         tally.counting(),
-        plural(valid, "vote", "votes"),
+        if valid == 1 { "vote" } else { "votes" },
     );
     text
-}
-
-fn plural<'a>(count: usize, one: &'a str, many: &'a str) -> &'a str {
-    if count == 1 { one } else { many }
 }
 
 fn headline(tally: &Tally) -> String {
@@ -297,11 +275,16 @@ fn headline(tally: &Tally) -> String {
     format!("{outcome}\n{window}")
 }
 
-/// Where the counted weight went: options still in the race or exhausted ballots
-///
-/// `round` is the final round. Options eliminated earlier show the round they went out in
-fn rows(tally: &Tally, round: &Round) -> Vec<(String, Row)> {
-    let mut rows: Vec<(String, Row)> = tally
+/// One bar per row
+fn chart(tally: &Tally, round: &Round) -> String {
+    const BAR: usize = 12;
+    let bar = |share: f64| {
+        let filled = ((share * BAR as f64).round() as usize).min(BAR);
+        let bar = "█".repeat(filled) + &"░".repeat(BAR - filled);
+        format!("{bar}  {:>6}", percent(share))
+    };
+
+    let mut rows: Vec<(String, String)> = tally
         .motion
         .options
         .iter()
@@ -311,10 +294,11 @@ fn rows(tally: &Tally, round: &Round) -> Vec<(String, Row)> {
                 .iter()
                 .find(|(number, _)| *number == option.number);
             let row = match score {
-                Some((_, score)) => Row::Share(tally.share(*score)),
+                Some((_, score)) => bar(tally.share(*score)),
                 None => {
                     let out = |round: &Round| round.eliminated.contains(&option.number);
-                    Row::Out(tally.rounds.iter().position(out)? + 1)
+                    let round = tally.rounds.iter().position(out)? + 1;
+                    format!("eliminated in round {round}")
                 }
             };
             Some((format!("Option {}", option.number), row))
@@ -322,38 +306,26 @@ fn rows(tally: &Tally, round: &Round) -> Vec<(String, Row)> {
         .collect();
     let exhausted = tally.share(tally.total - round.continuing_weight());
     if exhausted >= 0.0005 {
-        rows.push(("No option left".to_string(), Row::Share(exhausted)));
+        rows.push(("No option left".to_string(), bar(exhausted)));
     }
-    rows
-}
 
-enum Row {
-    /// Its share of the weight that counts
-    Share(f64),
-    /// The runoff round the option was eliminated in
-    Out(usize),
-}
-
-/// One bar per row, aligned to fit in a code block
-fn bars(rows: &[(String, Row)]) -> Vec<String> {
     let width = rows.iter().map(|(label, _)| label.len()).max().unwrap_or(0);
-    rows.iter()
-        .map(|(label, row)| match row {
-            Row::Share(share) => {
-                let filled = ((share * BAR as f64).round() as usize).min(BAR);
-                let bar = "█".repeat(filled) + &"░".repeat(BAR - filled);
-                format!("{label:<width$}  {bar}  {:>6}", percent(*share))
-            }
-            Row::Out(round) => format!("{label:<width$}  eliminated in round {round}"),
-        })
-        .collect()
+    let lines: Vec<String> = rows
+        .iter()
+        .map(|(label, row)| format!("{label:<width$}  {row}"))
+        .collect();
+    lines.join("\n")
 }
 
 fn fields(tally: &Tally) -> Vec<Field> {
     let mut fields: Vec<Field> = Vec::new();
 
     if tally.rounds.len() > 1 {
-        fields.push(("Runoff".to_string(), rounds(tally), false));
+        fields.push(Field {
+            name: "Runoff".to_string(),
+            lines: rounds(tally),
+            inline: false,
+        });
     }
 
     fields.extend(tally.standings.iter().map(card));
@@ -368,7 +340,11 @@ fn fields(tally: &Tally) -> Vec<Field> {
             };
             format!("[{}]({}) {reason}", rejected.author, rejected.url)
         });
-        fields.push((name, rejected.collect(), false));
+        fields.push(Field {
+            name,
+            lines: rejected.collect(),
+            inline: false,
+        });
     }
     fields
 }
@@ -389,20 +365,13 @@ fn card(standing: &Standing) -> Field {
         turnout
     }];
 
-    let cast = &standing.ballots;
     // Same order as the motion, with abstentions last
-    let mut votes: Vec<&Vote> = Vec::new();
-    for ballot in cast {
-        if !votes.contains(&&ballot.vote) {
-            votes.push(&ballot.vote);
-        }
+    let mut votes: BTreeMap<&Vote, Vec<&str>> = BTreeMap::new();
+    for ballot in &standing.ballots {
+        votes.entry(&ballot.vote).or_default().push(&ballot.member);
     }
-    votes.sort_by_key(|vote| match vote {
-        Vote::Ranked(options) => (0, options.clone()),
-        Vote::Abstain => (1, Vec::new()),
-    });
 
-    for vote in votes {
+    for (vote, members) in votes {
         let label = match vote {
             Vote::Abstain => "Abstained".to_string(),
             Vote::Ranked(options) => {
@@ -410,46 +379,29 @@ fn card(standing: &Standing) -> Field {
                 format!("Option {}", options.join(" > "))
             }
         };
-        let members: Vec<&str> = cast
-            .iter()
-            .filter(|ballot| ballot.vote == *vote)
-            .map(|ballot| ballot.member.as_str())
-            .collect();
         lines.push(format!("**{label}**: {}", members.join(", ")));
     }
-    (format!("{mark} {}", standing.entity.name), lines, true)
+    Field {
+        name: format!("{mark} {}", standing.entity.name),
+        lines,
+        inline: true,
+    }
 }
 
-/// Every runoff round: each option's score and ballots (`+` marks a ballot that just moved
-/// there)
+/// Every runoff round
 fn rounds(tally: &Tally) -> Vec<String> {
-    let ballots: Vec<(&str, &[u32])> = tally
-        .standings
-        .iter()
-        .filter(|standing| standing.passed_quorum)
-        .flat_map(|standing| &standing.ballots)
-        .filter_map(|ballot| match &ballot.vote {
-            Vote::Ranked(options) => Some((ballot.member.as_str(), options.as_slice())),
-            Vote::Abstain => None,
-        })
-        .collect();
-
     let mut lines = Vec::new();
     // Which option each ballot backed in the previous round
-    let mut before: Vec<Option<u32>> = Vec::new();
+    let mut before: Option<&Round> = None;
     for (position, round) in tally.rounds.iter().enumerate() {
-        let running = |option: &u32| round.scores.iter().any(|(number, _)| number == option);
-        let choices: Vec<Option<u32>> = ballots
-            .iter()
-            .map(|(_, ranking)| ranking.iter().copied().find(running))
-            .collect();
         let behind = |choice: Option<u32>| -> Vec<String> {
-            ballots
+            round
+                .choices
                 .iter()
                 .enumerate()
-                .filter(|(ballot, _)| choices[*ballot] == choice)
+                .filter(|(_, (_, backs))| *backs == choice)
                 .map(|(ballot, (member, _))| {
-                    let moved = before.get(ballot).is_some_and(|before| *before != choice);
+                    let moved = before.is_some_and(|before| before.choices[ballot].1 != choice);
                     format!("{}{member}", if moved { "+" } else { "" })
                 })
                 .collect()
@@ -474,7 +426,7 @@ fn rounds(tally: &Tally) -> Vec<String> {
         if !exhausted.is_empty() {
             lines.push(format!("No option left: {}", exhausted.join(", ")));
         }
-        before = choices;
+        before = Some(round);
     }
     lines
 }
@@ -570,8 +522,11 @@ mod tests {
     }
 
     fn field<'a>(fields: &'a [Field], name: &str) -> &'a [String] {
-        let (_, lines, _) = fields.iter().find(|field| field.0 == name).unwrap();
-        lines
+        &fields
+            .iter()
+            .find(|field| field.name == name)
+            .unwrap()
+            .lines
     }
 
     /// fyra votes as one, nobara misses its quorum, and a stranger votes too
@@ -638,7 +593,7 @@ mod tests {
     #[test]
     fn the_details_have_a_card_per_organisation() {
         let fields = fields(&closed());
-        let names: Vec<&str> = fields.iter().map(|field| &*field.0).collect();
+        let names: Vec<&str> = fields.iter().map(|field| field.name.as_str()).collect();
         assert_eq!(
             names,
             [
@@ -650,7 +605,7 @@ mod tests {
             ]
         );
         // Cards sit side by side, everything else takes the full width
-        let inline: Vec<bool> = fields.iter().map(|field| field.2).collect();
+        let inline: Vec<bool> = fields.iter().map(|field| field.inline).collect();
         assert_eq!(inline, [true, true, true, true, false]);
 
         assert_eq!(

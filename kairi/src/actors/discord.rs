@@ -9,7 +9,7 @@ use crate::platforms::{Data, DiscordBot};
 #[derive(Debug, Clone)]
 pub struct DiscordArgs {
     pub token: String,
-    pub rules: Policy,
+    pub policy: Policy,
 }
 pub struct DiscordActor {
     bot: Arc<DiscordBot>,
@@ -29,7 +29,15 @@ impl Actor for DiscordActor {
         actor_ref: kameo::prelude::ActorRef<Self>,
     ) -> Result<Self, Self::Error> {
         actor_ref.register(<Self as Actor>::name())?;
-        let bot = Arc::new(DiscordBot::build(&args.token, Data { rules: args.rules }).await?);
+        let bot = Arc::new(
+            DiscordBot::build(
+                &args.token,
+                Data {
+                    policy: args.policy,
+                },
+            )
+            .await?,
+        );
 
         let clone = bot.client.clone();
 

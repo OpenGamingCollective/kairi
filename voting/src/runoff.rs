@@ -8,6 +8,7 @@ const EPSILON: f64 = 1e-9;
 pub struct Round {
     pub scores: Vec<(u32, f64)>,
     pub eliminated: Vec<u32>,
+    pub choices: Vec<(String, Option<u32>)>,
 }
 
 impl Round {
@@ -31,26 +32,33 @@ pub enum Outcome {
 /// Do instant runoff magic. Too much to explain. Refer to governance docs
 pub(crate) fn runoff(
     options: &[u32],
-    ballots: &[(&[u32], f64)],
+    ballots: &[(&str, &[u32], f64)],
     total: f64,
 ) -> (Vec<Round>, Outcome) {
     let mut running = options.to_vec();
     let mut rounds = Vec::new();
 
     loop {
+        let choices: Vec<(String, Option<u32>)> = ballots
+            .iter()
+            .map(|(member, ranking, _)| {
+                // from the member's choices, the first choice that is still running
+                let choice = ranking.iter().copied().find(|c| running.contains(c));
+                (member.to_string(), choice)
+            })
+            .collect();
         let scores = running
             .iter()
             .map(|option| {
-                let backs = |ranking: &[u32]| {
-                    ranking.iter().find(|choice| running.contains(choice)) == Some(option)
-                };
-                let score = ballots.iter().filter(|(ranking, _)| backs(ranking));
-                (*option, score.map(|(_, share)| share).sum())
+                let backing = ballots.iter().zip(&choices);
+                let score = backing.filter(|(_, (_, choice))| *choice == Some(*option));
+                (*option, score.map(|((_, _, share), _)| share).sum())
             })
             .collect();
         let mut round = Round {
             scores,
             eliminated: Vec::new(),
+            choices,
         };
 
         let winner = round

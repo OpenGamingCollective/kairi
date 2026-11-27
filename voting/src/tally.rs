@@ -92,7 +92,7 @@ pub fn tally(
 
     // Each voter gets an equal part of their standing's weight.
     // Abstentions get dropped here. They are unranked but helped reach quorum
-    let ranked: Vec<(&[u32], f64)> = standings
+    let ranked: Vec<(&str, &[u32], f64)> = standings
         .iter()
         .filter(|s| s.passed_quorum)
         .flat_map(|s| {
@@ -100,14 +100,16 @@ pub fn tally(
             s.ballots
                 .iter()
                 .filter_map(move |ballot| match &ballot.vote {
-                    Vote::Ranked(options) => Some((options.as_slice(), share)),
+                    Vote::Ranked(options) => {
+                        Some((ballot.member.as_str(), options.as_slice(), share))
+                    }
                     Vote::Abstain => None,
                 })
         })
         .collect();
 
     // We have to do this part because with abstentions dropped, total may no longer be 1
-    let total: f64 = ranked.iter().map(|(_, share)| share).sum();
+    let total: f64 = ranked.iter().map(|(_, _, share)| share).sum();
 
     let options: Vec<u32> = motion.options.iter().map(|option| option.number).collect();
     let (rounds, outcome) = if void {
@@ -132,6 +134,14 @@ impl Tally {
     /// Number of entities that passed quorum
     pub fn counting(&self) -> usize {
         self.standings.iter().filter(|s| s.passed_quorum).count()
+    }
+
+    /// Returns the ballots that counted
+    pub fn ballots(&self) -> impl Iterator<Item = &Ballot> {
+        self.standings
+            .iter()
+            .filter(|s| s.passed_quorum)
+            .flat_map(|s| &s.ballots)
     }
 
     /// Total ballots cast

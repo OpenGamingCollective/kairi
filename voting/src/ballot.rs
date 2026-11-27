@@ -18,10 +18,10 @@ pub struct Reply {
     pub body: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Vote {
-    Abstain,
     Ranked(Vec<u32>),
+    Abstain,
 }
 
 /// A member's vote

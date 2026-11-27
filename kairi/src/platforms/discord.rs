@@ -7,12 +7,19 @@ use voting::Policy;
 mod votes;
 
 pub struct Data {
-    pub rules: Policy,
+    pub policy: Policy,
 }
 
 type SerenityError = Box<dyn std::error::Error + Send + Sync>;
 
 type SerenityContext<'a> = poise::Context<'a, Data, SerenityError>;
+
+/// Discord's limits
+const TITLE: usize = 256;
+const FIELD: usize = 1024;
+const FIELDS: usize = 25;
+const CHOICE: usize = 100;
+const CHOICES: usize = 25;
 
 pub struct DiscordBot {
     pub client: Arc<Mutex<serenity::Client>>,
