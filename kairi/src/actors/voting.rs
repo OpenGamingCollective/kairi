@@ -22,11 +22,6 @@ pub struct Voting {
 }
 
 #[derive(Debug, Clone)]
-pub struct VotingArgs {
-    pub config: VotingConfig,
-}
-
-#[derive(Debug, Clone)]
 pub struct CountVotes {
     pub list: MailingListEnum,
     pub thread: String,
@@ -71,18 +66,16 @@ impl<M> From<SendError<M, MailingListError>> for VotingError {
 }
 
 impl Actor for Voting {
-    type Args = VotingArgs;
+    type Args = VotingConfig;
     type Error = anyhow::Error;
 
     fn name() -> &'static str {
         "voting"
     }
 
-    async fn on_start(args: Self::Args, actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
+    async fn on_start(config: Self::Args, actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
         actor_ref.register(<Self as Actor>::name())?;
-        Ok(Self {
-            config: args.config,
-        })
+        Ok(Self { config })
     }
 }
 

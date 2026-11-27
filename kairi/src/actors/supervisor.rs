@@ -16,7 +16,7 @@ use crate::{
         discord::{DiscordActor, DiscordArgs},
         public_inbox_mirror::{PublicInboxMirror, PublicInboxMirrorArgs},
         public_inbox_reader::PublicInboxReader,
-        voting::{Voting, VotingArgs},
+        voting::Voting,
     },
     types::MailingListEnum,
 };
@@ -74,16 +74,11 @@ impl Actor for Kairi {
             .spawn()
             .await;
 
-        let voting = Voting::supervise(
-            &actor_ref,
-            VotingArgs {
-                config: args.config.voting.clone(),
-            },
-        )
-        .restart_policy(RestartPolicy::Permanent)
-        .restart_limit(5, Duration::from_secs(10))
-        .spawn()
-        .await;
+        let voting = Voting::supervise(&actor_ref, args.config.voting.clone())
+            .restart_policy(RestartPolicy::Permanent)
+            .restart_limit(5, Duration::from_secs(10))
+            .spawn()
+            .await;
 
         // Started last, since its commands talk to the other actors
         let discord = DiscordActor::supervise(
