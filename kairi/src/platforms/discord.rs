@@ -4,7 +4,6 @@ use poise::serenity_prelude as serenity;
 use tokio::sync::Mutex;
 use voting::Policy;
 
-mod voteconfig;
 mod votes;
 
 pub struct Data {
@@ -26,7 +25,7 @@ impl DiscordBot {
 
         let framework = poise::Framework::<Data, SerenityError>::builder()
             .options(poise::FrameworkOptions {
-                commands: vec![ping(), votes::votes(), voteconfig::voteconfig()],
+                commands: vec![ping(), votes::votes()],
                 event_handler: |framework, event| {
                     Box::pin(votes::on_event(framework.serenity_context, event))
                 },
