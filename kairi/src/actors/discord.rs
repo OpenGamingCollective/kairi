@@ -2,13 +2,14 @@ use std::sync::Arc;
 
 use kameo::Actor;
 use tokio::task::JoinHandle;
+use voting::Policy;
 
-use crate::platforms::DiscordBot;
+use crate::platforms::{Data, DiscordBot};
 
 #[derive(Debug, Clone)]
 pub struct DiscordArgs {
     pub token: String,
-    // TODO: put other actors ref here
+    pub policy: Policy,
 }
 pub struct DiscordActor {
     bot: Arc<DiscordBot>,
@@ -25,9 +26,18 @@ impl Actor for DiscordActor {
 
     async fn on_start(
         args: Self::Args,
-        _actor_ref: kameo::prelude::ActorRef<Self>,
+        actor_ref: kameo::prelude::ActorRef<Self>,
     ) -> Result<Self, Self::Error> {
-        let bot = Arc::new(DiscordBot::build(&args.token).await?);
+        actor_ref.register(<Self as Actor>::name())?;
+        let bot = Arc::new(
+            DiscordBot::build(
+                &args.token,
+                Data {
+                    policy: args.policy,
+                },
+            )
+            .await?,
+        );
 
         let clone = bot.client.clone();
 

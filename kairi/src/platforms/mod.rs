@@ -1,3 +1,3 @@
 mod discord;
 
-pub use discord::DiscordBot;
+pub use discord::{Data, DiscordBot};

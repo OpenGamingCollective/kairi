@@ -45,6 +45,12 @@ impl Reader {
         index::read_thread(&self.dir, uid)
     }
 
+    /// Find the thread containing a Message-ID. Scans every thread unless the mail starts one
+    #[instrument(level = "debug", skip_all, fields(dir = %self.dir.display(), message_id = message_id))]
+    pub fn find_thread(&self, message_id: &str) -> Result<Option<Thread>> {
+        index::find_thread(&self.dir, message_id)
+    }
+
     /// Read a whole mail from the mirror
     #[instrument(
         level = "debug",

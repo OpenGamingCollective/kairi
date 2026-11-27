@@ -2272,18 +2272,22 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "jiff",
  "kairi-config",
  "kameo",
  "kameo_actors",
+ "percent-encoding",
  "poise",
  "public-inbox",
  "serde",
  "strum",
+ "thiserror 2.0.21",
  "tokio",
  "toml",
  "tracing",
  "tracing-subscriber",
  "typesafe-api",
+ "voting",
 ]
 
 [[package]]
@@ -2293,6 +2297,7 @@ dependencies = [
  "anyhow",
  "serde",
  "toml",
+ "voting",
 ]
 
 [[package]]
@@ -2650,9 +2655,9 @@ dependencies = [
 name = "public-inbox"
 version = "0.1.0"
 dependencies = [
- "chrono",
  "flate2",
  "gix",
+ "jiff",
  "mail-parser",
  "reqwest 0.13.5",
  "serde",
@@ -4002,6 +4007,16 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+
+[[package]]
+name = "voting"
+version = "0.1.0"
+dependencies = [
+ "jiff",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
 
 [[package]]
 name = "walkdir"

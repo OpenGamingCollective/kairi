@@ -175,6 +175,35 @@ pub(crate) fn read_thread(dir: &Path, uid: &str) -> Result<Option<Thread>> {
     read(&dir.join(INDEX).join(THREADS).join(format!("{uid}.json")))
 }
 
+/// The indexed thread a mail belongs to, or `None` if the mail isn't archived
+pub(crate) fn find_thread(dir: &Path, message_id: &str) -> Result<Option<Thread>> {
+    let holds = |thread: &Thread| {
+        thread
+            .mails()
+            .iter()
+            .any(|mail| mail.message_id == message_id)
+    };
+
+    // Most lookups use the thread's first mail
+    if let Some(thread) = read_thread(dir, &Thread::uid_of(message_id))?
+        && holds(&thread)
+    {
+        return Ok(Some(thread));
+    }
+
+    let Some(list) = read_list(dir)? else {
+        return Ok(None);
+    };
+    for summary in &list.threads {
+        if let Some(thread) = read_thread(dir, &summary.uid)?
+            && holds(&thread)
+        {
+            return Ok(Some(thread));
+        }
+    }
+    Ok(None)
+}
+
 fn read<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
     match fs::read(path) {
         Ok(json) => Ok(Some(serde_json::from_slice(&json)?)),

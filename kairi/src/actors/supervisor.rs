@@ -16,6 +16,7 @@ use crate::{
         discord::{DiscordActor, DiscordArgs},
         public_inbox_mirror::{PublicInboxMirror, PublicInboxMirrorArgs},
         public_inbox_reader::PublicInboxReader,
+        voting::Voting,
     },
     types::MailingListEnum,
 };
@@ -53,20 +54,10 @@ impl Actor for Kairi {
 
         let _ = kairi.config.set(args.config.clone());
 
-        let discord = DiscordActor::supervise(
-            &actor_ref,
-            DiscordArgs {
-                token: args.config.discord.token,
-            },
-        )
-        .restart_policy(RestartPolicy::Permanent)
-        .restart_limit(5, Duration::from_secs(10))
-        .spawn()
-        .await;
-
         let _public_inbox_mirror = PublicInboxMirror::supervise(
             &actor_ref,
             PublicInboxMirrorArgs {
+                url: args.config.public_inbox.url.clone(),
                 repositories: MailingListEnum::VARIANTS.to_vec(),
                 dir: public_inbox_dir.clone(),
             },
@@ -81,6 +72,25 @@ impl Actor for Kairi {
             .restart_limit(5, Duration::from_secs(10))
             .spawn()
             .await;
+
+        let _voting = Voting::supervise(&actor_ref, args.config.voting.clone())
+            .restart_policy(RestartPolicy::Permanent)
+            .restart_limit(5, Duration::from_secs(10))
+            .spawn()
+            .await;
+
+        // Started last, since its commands talk to the other actors
+        let discord = DiscordActor::supervise(
+            &actor_ref,
+            DiscordArgs {
+                policy: args.config.voting.policy.clone(),
+                token: args.config.discord.token,
+            },
+        )
+        .restart_policy(RestartPolicy::Permanent)
+        .restart_limit(5, Duration::from_secs(10))
+        .spawn()
+        .await;
 
         let _ = kairi.reader_ref.set(public_inbox_reader);
 

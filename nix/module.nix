@@ -20,6 +20,12 @@
           app_id = cfg.settings.github.appId;
           pem_path = cfg.settings.github.pemPath;
         };
+        voting = {
+          roster_path = cfg.settings.voting.rosterPath;
+          internal_quorum = cfg.settings.voting.internalQuorum;
+          coalition_quorum = cfg.settings.voting.coalitionQuorum;
+          window_hours = cfg.settings.voting.windowHours;
+        };
       };
 
       command = "${cfg.package}/bin/kairi --config ${cfg.tomlFile} --data-dir ${cfg.dataDir}";
@@ -110,6 +116,40 @@
                         lib.types.path
                       ];
                       default = "";
+                    };
+                  };
+                };
+              };
+              voting = lib.mkOption {
+                default = { };
+                type = lib.types.submodule {
+                  options = {
+                    rosterPath = lib.mkOption {
+                      type = lib.types.oneOf [
+                        lib.types.str
+                        lib.types.path
+                      ];
+                      default = "";
+                      description = ''
+                        JSON of the members and groups of the inventory, as
+                        `{ members = { ... }; groups = { ... }; }`.
+                        Votes can't be counted without it
+                      '';
+                    };
+                    internalQuorum = lib.mkOption {
+                      type = lib.types.numbers.between 0 1;
+                      default = 0.5;
+                      description = "Share of an organisation's roster that has to vote for it to count";
+                    };
+                    coalitionQuorum = lib.mkOption {
+                      type = lib.types.numbers.between 0 1;
+                      default = 0.5;
+                      description = "Share of the organisations that have to count for a vote to stand";
+                    };
+                    windowHours = lib.mkOption {
+                      type = lib.types.ints.positive;
+                      default = 24;
+                      description = "How long a vote lasts when its first mail doesn't say";
                     };
                   };
                 };

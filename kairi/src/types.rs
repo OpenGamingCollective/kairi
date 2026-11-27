@@ -1,8 +1,5 @@
 use std::fmt::Display;
 
-/// OGC's public-inbox instance, the upstream the actor mirrors
-pub const LISTS_URL: &str = "https://lists.opengamingcollective.org";
-
 #[derive(Debug, poise::ChoiceParameter, PartialEq, Hash, Eq, Clone, Copy, strum::VariantArray)]
 pub enum MailingListEnum {
     #[name = "announcements"]
