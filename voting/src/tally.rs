@@ -132,7 +132,7 @@ pub fn tally(
 
 impl Tally {
     /// Number of entities that passed quorum
-    pub fn counting(&self) -> usize {
+    pub fn counting_entitites(&self) -> usize {
         self.standings.iter().filter(|s| s.passed_quorum).count()
     }
 
@@ -340,7 +340,7 @@ mod tests {
     #[test]
     fn the_vote_is_void_under_the_coalition_quorum() {
         let tally = count(&votes(&[("duo1", "Option 1")]));
-        assert_eq!(tally.counting(), 1);
+        assert_eq!(tally.counting_entitites(), 1);
         assert_eq!(tally.outcome, Outcome::Void);
         assert!(tally.rounds.is_empty());
 

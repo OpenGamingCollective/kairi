@@ -23,14 +23,12 @@ pub struct Voting {
 
 #[derive(Debug, Clone)]
 pub struct CountVotes {
-    pub list: MailingListEnum,
     pub thread: String,
     pub requested_by: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct Count {
-    pub list: MailingListEnum,
     pub thread: Thread,
     pub roster: Roster,
     pub tally: Tally,
@@ -83,13 +81,12 @@ impl Message<CountVotes> for Voting {
     #[instrument(
         name = "CountVotes",
         skip_all,
-        fields(%list, thread = %thread, requested_by = %requested_by),
+        fields(thread = %thread, requested_by = %requested_by),
         err(level = "warn")
     )]
     async fn handle(
         &mut self,
         CountVotes {
-            list,
             thread,
             requested_by,
         }: CountVotes,
@@ -98,10 +95,10 @@ impl Message<CountVotes> for Voting {
         // Re-read on every count so it can change without a restart
         let roster = self.roster().await?;
 
-        let thread = self.thread(list, &thread, &requested_by).await?;
+        let thread = self.thread(&thread, &requested_by).await?;
         let messages = reader()?
             .ask(FetchMessages {
-                list,
+                list: MailingListEnum::Governance,
                 mails: thread.mails().to_vec(),
                 requested_by,
             })
@@ -138,7 +135,6 @@ impl Message<CountVotes> for Voting {
             "counted"
         );
         Ok(Count {
-            list,
             thread,
             roster,
             tally,
@@ -159,18 +155,13 @@ impl Voting {
         Roster::parse(&json).map_err(|error| VotingError::Roster(error.to_string()))
     }
 
-    async fn thread(
-        &self,
-        list: MailingListEnum,
-        thread: &str,
-        requested_by: &str,
-    ) -> Result<Thread, VotingError> {
+    async fn thread(&self, thread: &str, requested_by: &str) -> Result<Thread, VotingError> {
         let requested_by = requested_by.to_string();
         let thread = match Reference::parse(thread) {
             Reference::Uid(uid) => {
                 reader()?
                     .ask(FetchThread {
-                        list,
+                        list: MailingListEnum::Governance,
                         uid,
                         requested_by,
                     })
@@ -179,7 +170,7 @@ impl Voting {
             Reference::MessageId(message_id) => {
                 reader()?
                     .ask(FindThread {
-                        list,
+                        list: MailingListEnum::Governance,
                         message_id,
                         requested_by,
                     })

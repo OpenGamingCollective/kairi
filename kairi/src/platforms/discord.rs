@@ -17,7 +17,6 @@ type SerenityContext<'a> = poise::Context<'a, Data, SerenityError>;
 /// Discord's limits
 const TITLE: usize = 256;
 const FIELD: usize = 1024;
-const FIELDS: usize = 25;
 const CHOICE: usize = 100;
 const CHOICES: usize = 25;
 

@@ -3,16 +3,16 @@
 use std::{collections::BTreeMap, fmt::Write};
 
 use kameo::error::SendError;
-use poise::{ChoiceParameter, serenity_prelude as serenity};
+use poise::serenity_prelude as serenity;
 use voting::{Outcome, Reason, Round, Standing, Tally, Vote};
 
-use super::{CHOICE, CHOICES, FIELD, FIELDS, SerenityContext, SerenityError, TITLE};
+use super::{CHOICE, CHOICES, FIELD, SerenityContext, SerenityError, TITLE};
 use crate::{
     actors::{Count, CountVotes, FetchList, reader, voting},
     types::MailingListEnum,
 };
 
-/// Prefix of the details button's id, which looks like `votes:<list>:<uid>`
+/// Prefix of the details button's id, which looks like `votes:<uid>`
 const DETAILS: &str = "votes";
 
 struct Field {
@@ -28,119 +28,22 @@ pub async fn votes(
     #[description = "Thread of the vote, or the link of any of its mails"]
     #[autocomplete = "threads"]
     thread: String,
-    #[description = "List the thread is on, governance by default"] list: Option<MailingListEnum>,
 ) -> Result<(), SerenityError> {
     ctx.defer().await?;
 
-    let count = CountVotes {
-        list: list.unwrap_or(MailingListEnum::Governance),
-        thread,
-        requested_by: format!("discord /votes @{}", ctx.author().name),
+    let requested_by = format!("discord /votes @{}", ctx.author().name);
+    let reply = match count_votes(thread, requested_by).await {
+        Ok(count) => poise::CreateReply::default()
+            .embed(summary_embed(&count))
+            .components(vec![details_button(&count)]),
+        Err(error) => poise::CreateReply::default().content(error),
     };
-    match count_votes(count).await {
-        Ok(count) => {
-            let details = serenity::CreateButton::new(details_id(&count))
-                .label("Details")
-                .style(serenity::ButtonStyle::Secondary);
-            let reply = poise::CreateReply::default()
-                .embed(summary(&count))
-                .components(vec![serenity::CreateActionRow::Buttons(vec![details])]);
-            ctx.send(reply).await?;
-        }
-        Err(error) => {
-            ctx.say(error).await?;
-        }
-    }
+    ctx.send(reply).await?;
     Ok(())
-}
-
-/// Reply to the details button
-pub async fn on_event(
-    ctx: &serenity::Context,
-    event: &serenity::FullEvent,
-) -> Result<(), SerenityError> {
-    let serenity::FullEvent::InteractionCreate { interaction } = event else {
-        return Ok(());
-    };
-    let Some(component) = interaction.as_message_component() else {
-        return Ok(());
-    };
-    let Some((list, uid)) = parse_details_id(&component.data.custom_id) else {
-        return Ok(());
-    };
-
-    component.defer_ephemeral(&ctx.http).await?;
-    let count = CountVotes {
-        list,
-        thread: uid,
-        requested_by: format!("discord /votes details @{}", component.user.name),
-    };
-    let followup = serenity::CreateInteractionResponseFollowup::new().ephemeral(true);
-    let followup = match count_votes(count).await {
-        Ok(count) => followup.embed(details(&count)),
-        Err(error) => followup.content(error),
-    };
-    component.create_followup(&ctx.http, followup).await?;
-    Ok(())
-}
-
-/// Ask the voting actor for a count
-async fn count_votes(count: CountVotes) -> Result<Count, String> {
-    let voting = voting().map_err(|error| format!("Can't count the votes right now, {error}"))?;
-    voting.ask(count).await.map_err(|error| match error {
-        SendError::HandlerError(error) => format!("Can't count the votes: {error}"),
-        error => format!("Can't count the votes right now: {error}"),
-    })
-}
-
-fn details_id(count: &Count) -> String {
-    format!("{DETAILS}:{}:{}", count.list, count.thread.uid())
-}
-
-fn parse_details_id(id: &str) -> Option<(MailingListEnum, String)> {
-    let (list, uid) = id
-        .strip_prefix(DETAILS)?
-        .strip_prefix(':')?
-        .split_once(':')?;
-    Some((MailingListEnum::from_name(list)?, uid.to_string()))
-}
-
-/// Governance threads, newest first
-async fn threads(ctx: SerenityContext<'_>, partial: &str) -> serenity::CreateAutocompleteResponse {
-    let fetch = FetchList {
-        list: MailingListEnum::Governance,
-        requested_by: format!("discord /votes autocomplete @{}", ctx.author().name),
-    };
-    let list = match reader() {
-        Ok(reader) => reader.ask(fetch).await.unwrap_or_default(),
-        Err(_) => Default::default(),
-    };
-
-    let partial = partial.to_lowercase();
-    let choices = list
-        .threads
-        .iter()
-        .rev()
-        .filter(|thread| thread.name.to_lowercase().contains(&partial))
-        .take(CHOICES)
-        .map(|thread| {
-            let name = format!("{} ({})", thread.name, thread.date.strftime("%Y-%m-%d"));
-            serenity::AutocompleteChoice::new(truncate(&name, CHOICE), thread.uid.clone())
-        })
-        .collect();
-    serenity::CreateAutocompleteResponse::new().set_choices(choices)
-}
-
-fn colour(tally: &Tally) -> serenity::Colour {
-    match tally.outcome {
-        _ if tally.open => serenity::Colour::ORANGE,
-        Outcome::Passed(_) => serenity::colours::roles::GREEN,
-        Outcome::NoMajority | Outcome::Tied | Outcome::Void => serenity::Colour::RED,
-    }
 }
 
 /// Vote result summary embed
-fn summary(count: &Count) -> serenity::CreateEmbed {
+fn summary_embed(count: &Count) -> serenity::CreateEmbed {
     serenity::CreateEmbed::new()
         .title(truncate(count.thread.name(), TITLE))
         .url(count.thread.url())
@@ -148,57 +51,18 @@ fn summary(count: &Count) -> serenity::CreateEmbed {
         .colour(colour(&count.tally))
 }
 
-/// Vote details and breakdown embed
-fn details(count: &Count) -> serenity::CreateEmbed {
-    let tally = &count.tally;
-    let title = truncate(count.thread.name(), TITLE);
-    let footer = format!(
-        "{} out of {} members eligible for voting",
-        count.roster.eligible_count(),
-        count.roster.member_count()
-    );
-
-    // Long fields spill over into the next one as long as the embed has room
-    let size = |text: &str| text.chars().count();
-    let mut room = serenity::EMBED_MAX_LENGTH.saturating_sub(size(&title) + size(&footer));
-    let fields: Vec<(String, String, bool)> = fields(tally)
-        .into_iter()
-        .flat_map(
-            |Field {
-                 name,
-                 lines,
-                 inline,
-             }| {
-                let texts = chunks(&lines, FIELD).into_iter().enumerate();
-                texts.map(move |(position, text)| match position {
-                    0 => (name.clone(), text, inline),
-                    _ => (format!("{name}, continued"), text, inline),
-                })
-            },
-        )
-        .take(FIELDS)
-        .take_while(|(name, text, _)| {
-            let fits = size(name) + size(text) <= room;
-            if fits {
-                room -= size(name) + size(text);
-            }
-            fits
-        })
-        .collect();
-
-    serenity::CreateEmbed::new()
-        .title(title)
-        .url(count.thread.url())
-        .fields(fields)
-        .footer(serenity::CreateEmbedFooter::new(footer))
-        .colour(colour(tally))
+fn details_button(count: &Count) -> serenity::CreateActionRow {
+    let button = serenity::CreateButton::new(details_id(count))
+        .label("Details")
+        .style(serenity::ButtonStyle::Secondary);
+    serenity::CreateActionRow::Buttons(vec![button])
 }
 
 fn overview(tally: &Tally) -> String {
     let mut text = headline(tally);
 
     if let Some(round) = tally.rounds.last() {
-        let _ = write!(text, "\n```\n{}\n```", chart(tally, round));
+        let _ = write!(text, "\n```\n{}\n```\n", chart(tally, round));
         let _ = writeln!(
             text,
             "Share of the weight of the organisations that reached quorum"
@@ -235,15 +99,131 @@ fn overview(tally: &Tally) -> String {
         .filter(|ballot| ballot.vote == Vote::Abstain)
         .count();
     let valid = tally.ballots().count() - abstained;
-    let left_out = tally.cast() - valid - abstained + tally.rejected.len();
+    let left_out = tally.cast() - tally.ballots().count() + tally.rejected.len();
     let _ = write!(
         text,
         "Quorum: **{}** of **{entities}** organisations, **{needed}** needed\n\
          **{valid}** valid {}, **{abstained}** abstained, **{left_out}** not counted",
-        tally.counting(),
+        tally.counting_entitites(),
         if valid == 1 { "vote" } else { "votes" },
     );
     text
+}
+
+/// Reply to the details button
+pub async fn on_event(
+    ctx: &serenity::Context,
+    event: &serenity::FullEvent,
+) -> Result<(), SerenityError> {
+    let serenity::FullEvent::InteractionCreate { interaction } = event else {
+        return Ok(());
+    };
+    let Some(component) = interaction.as_message_component() else {
+        return Ok(());
+    };
+    let Some(uid) = parse_details_id(&component.data.custom_id) else {
+        return Ok(());
+    };
+    show_details(ctx, component, uid).await
+}
+
+async fn show_details(
+    ctx: &serenity::Context,
+    component: &serenity::ComponentInteraction,
+    uid: String,
+) -> Result<(), SerenityError> {
+    component.defer_ephemeral(&ctx.http).await?;
+
+    let requested_by = format!("discord /votes details @{}", component.user.name);
+    let followup = serenity::CreateInteractionResponseFollowup::new().ephemeral(true);
+    let followup = match count_votes(uid, requested_by).await {
+        Ok(count) => followup.embed(details_embed(&count)),
+        Err(error) => followup.content(error),
+    };
+    component.create_followup(&ctx.http, followup).await?;
+    Ok(())
+}
+
+/// Ask the voting actor for a count
+async fn count_votes(thread: String, requested_by: String) -> Result<Count, String> {
+    let voting = voting().map_err(|error| format!("Can't count the votes right now: {error}"))?;
+    let count = CountVotes {
+        thread,
+        requested_by,
+    };
+    voting.ask(count).await.map_err(|error| match error {
+        SendError::HandlerError(error) => format!("Can't count the votes: {error}"),
+        error => format!("Can't count the votes right now: {error}"),
+    })
+}
+
+/// Governance threads, newest first
+async fn threads(ctx: SerenityContext<'_>, partial: &str) -> serenity::CreateAutocompleteResponse {
+    let fetch = FetchList {
+        list: MailingListEnum::Governance,
+        requested_by: format!("discord /votes autocomplete @{}", ctx.author().name),
+    };
+    let list = match reader() {
+        Ok(reader) => reader.ask(fetch).await.unwrap_or_default(),
+        Err(_) => Default::default(),
+    };
+
+    let partial = partial.to_lowercase();
+    let choices = list
+        .threads
+        .iter()
+        .rev()
+        .filter(|thread| thread.name.to_lowercase().contains(&partial))
+        .take(CHOICES)
+        .map(|thread| {
+            let name = format!("{} ({})", thread.name, thread.date.strftime("%Y-%m-%d"));
+            serenity::AutocompleteChoice::new(truncate(&name, CHOICE), thread.uid.clone())
+        })
+        .collect();
+    serenity::CreateAutocompleteResponse::new().set_choices(choices)
+}
+
+fn details_id(count: &Count) -> String {
+    format!("{DETAILS}:{}", count.thread.uid())
+}
+
+fn parse_details_id(id: &str) -> Option<String> {
+    let uid = id.strip_prefix(DETAILS)?.strip_prefix(':')?;
+    Some(uid.to_string())
+}
+
+fn colour(tally: &Tally) -> serenity::Colour {
+    match tally.outcome {
+        _ if tally.open => serenity::Colour::ORANGE,
+        Outcome::Passed(_) => serenity::colours::roles::GREEN,
+        Outcome::NoMajority | Outcome::Tied | Outcome::Void => serenity::Colour::RED,
+    }
+}
+
+/// Vote details and breakdown embed
+fn details_embed(count: &Count) -> serenity::CreateEmbed {
+    let tally = &count.tally;
+    let title = truncate(count.thread.name(), TITLE);
+    let footer = format!(
+        "{} out of {} members eligible for voting",
+        count.roster.eligible_count(),
+        count.roster.member_count()
+    );
+
+    let fields = fields(tally).into_iter().map(|field| {
+        (
+            field.name,
+            truncate(&field.lines.join("\n"), FIELD),
+            field.inline,
+        )
+    });
+
+    serenity::CreateEmbed::new()
+        .title(title)
+        .url(count.thread.url())
+        .fields(fields)
+        .footer(serenity::CreateEmbedFooter::new(footer))
+        .colour(colour(tally))
 }
 
 fn headline(tally: &Tally) -> String {
@@ -365,7 +345,6 @@ fn card(standing: &Standing) -> Field {
         turnout
     }];
 
-    // Same order as the motion, with abstentions last
     let mut votes: BTreeMap<&Vote, Vec<&str>> = BTreeMap::new();
     for ballot in &standing.ballots {
         votes.entry(&ballot.vote).or_default().push(&ballot.member);
@@ -433,27 +412,6 @@ fn rounds(tally: &Tally) -> Vec<String> {
 
 fn percent(share: f64) -> String {
     format!("{:.1}%", share * 100.0)
-}
-
-/// Pack whole lines into chunks of at most `limit` characters
-fn chunks(lines: &[String], limit: usize) -> Vec<String> {
-    let mut chunks = Vec::new();
-    let mut text = String::new();
-    for line in lines {
-        // A line longer than a chunk gets cut
-        let line = truncate(line, limit);
-        if !text.is_empty() && text.chars().count() + 1 + line.chars().count() > limit {
-            chunks.push(std::mem::take(&mut text));
-        }
-        if !text.is_empty() {
-            text.push('\n');
-        }
-        text.push_str(&line);
-    }
-    if !text.is_empty() {
-        chunks.push(text);
-    }
-    chunks
 }
 
 fn truncate(text: &str, limit: usize) -> String {
@@ -556,7 +514,7 @@ mod tests {
              ```\n\
              Option 1  ███████░░░░░   58.6%\n\
              Option 2  █████░░░░░░░   41.4%\n\
-             ```\
+             ```\n\
              Share of the weight of the organisations that reached quorum\n\
              \n\
              Option 1 has **58.6%**, more than half is needed\n\
@@ -642,7 +600,7 @@ mod tests {
              Option 1  eliminated in round 1\n\
              Option 2  ████████████  100.0%\n\
              Option 3  eliminated in round 1\n\
-             ```\
+             ```\n\
              Share of the weight of the organisations that reached quorum\n\
              After 2 rounds of instant runoff\n"
         ));
@@ -670,25 +628,15 @@ mod tests {
     #[test]
     fn the_details_button_remembers_its_thread() {
         assert_eq!(
-            parse_details_id("votes:governance:0a1b2c3d4e5f"),
-            Some((MailingListEnum::Governance, "0a1b2c3d4e5f".to_string()))
+            parse_details_id("votes:0a1b2c3d4e5f"),
+            Some("0a1b2c3d4e5f".to_string())
         );
-        assert_eq!(parse_details_id("votes:nope:0a1b2c3d4e5f"), None);
-        assert_eq!(parse_details_id("other:governance:0a1b"), None);
-        assert_eq!(parse_details_id("votes:governance"), None);
+        assert_eq!(parse_details_id("other:0a1b"), None);
+        assert_eq!(parse_details_id("votes0a1b"), None);
     }
 
     #[test]
-    fn long_fields_go_on_in_the_next_one() {
-        let lines: Vec<String> = (0..5).map(|line| format!("line {line}")).collect();
-        assert_eq!(chunks(&lines[..2], 100), ["line 0\nline 1"]);
-        assert_eq!(
-            chunks(&lines, 13),
-            ["line 0\nline 1", "line 2\nline 3", "line 4"]
-        );
-        assert_eq!(chunks(&lines[..1], 5), ["line…"]);
-        assert!(chunks(&[], 5).is_empty());
-
+    fn long_text_is_cut() {
         assert_eq!(truncate("hello", 5), "hello");
         assert_eq!(truncate("hello!", 5), "hell…");
     }
