@@ -27,7 +27,6 @@ pub struct Tally {
     pub open: bool,
     pub rejected: Vec<Rejected>,
     pub standings: Vec<Standing>,
-    pub counting: usize,
     pub needed: usize,
     pub rounds: Vec<Round>,
     pub total: f64,
@@ -122,12 +121,32 @@ pub fn tally(
         motion,
         rejected,
         standings,
-        counting,
         needed,
         rounds,
         total,
         outcome,
     })
+}
+
+impl Tally {
+    /// Number of entities that passed quorum
+    pub fn counting(&self) -> usize {
+        self.standings.iter().filter(|s| s.passed_quorum).count()
+    }
+
+    /// Total ballots cast
+    pub fn cast(&self) -> usize {
+        self.standings.iter().map(|s| s.ballots.len()).sum()
+    }
+
+    /// Share of the counted weight
+    pub fn share(&self, weight: f64) -> f64 {
+        if self.total > 0.0 {
+            weight / self.total
+        } else {
+            0.0
+        }
+    }
 }
 
 #[cfg(test)]
@@ -311,7 +330,7 @@ mod tests {
     #[test]
     fn the_vote_is_void_under_the_coalition_quorum() {
         let tally = count(&votes(&[("duo1", "Option 1")]));
-        assert_eq!(tally.counting, 1);
+        assert_eq!(tally.counting(), 1);
         assert_eq!(tally.outcome, Outcome::Void);
         assert!(tally.rounds.is_empty());
 

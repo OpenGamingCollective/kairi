@@ -107,7 +107,7 @@ async fn count_votes(count: CountVotes) -> Result<Count, String> {
 }
 
 fn details_id(count: &Count) -> String {
-    format!("{DETAILS}:{}:{}", count.list, count.uid)
+    format!("{DETAILS}:{}:{}", count.list, count.thread.uid())
 }
 
 fn parse_details_id(id: &str) -> Option<(MailingListEnum, String)> {
@@ -159,8 +159,8 @@ fn colour(tally: &Tally) -> u32 {
 /// The outcome and each option's score
 fn summary(count: &Count) -> serenity::CreateEmbed {
     serenity::CreateEmbed::new()
-        .title(truncate(&count.name, TITLE))
-        .url(&count.url)
+        .title(truncate(count.thread.name(), TITLE))
+        .url(count.thread.url())
         .description(overview(&count.tally))
         .colour(colour(&count.tally))
 }
@@ -168,7 +168,7 @@ fn summary(count: &Count) -> serenity::CreateEmbed {
 /// Who voted for what in each organisation, plus anything that wasn't counted
 fn details(count: &Count) -> serenity::CreateEmbed {
     let tally = &count.tally;
-    let title = truncate(&count.name, TITLE);
+    let title = truncate(count.thread.name(), TITLE);
     let footer = format!(
         "{} members, {} of them can vote",
         count.roster.member_count(),
@@ -199,7 +199,7 @@ fn details(count: &Count) -> serenity::CreateEmbed {
 
     serenity::CreateEmbed::new()
         .title(title)
-        .url(&count.url)
+        .url(count.thread.url())
         .fields(fields)
         .footer(serenity::CreateEmbedFooter::new(footer))
         .colour(colour(tally))
@@ -228,7 +228,7 @@ fn overview(tally: &Tally) -> String {
         if let Some((number, score)) = leader
             && tally.total > 0.0
         {
-            let share = percent(score / tally.total);
+            let share = percent(tally.share(*score));
             let _ = writeln!(
                 text,
                 "Option {number} has **{share}**, more than half is needed"
@@ -253,17 +253,12 @@ fn overview(tally: &Tally) -> String {
             .count()
     };
     let (valid, abstained) = (counted(false), counted(true));
-    let cast: usize = tally
-        .standings
-        .iter()
-        .map(|standing| standing.ballots.len())
-        .sum();
-    let left_out = cast - valid - abstained + tally.rejected.len();
+    let left_out = tally.cast() - valid - abstained + tally.rejected.len();
     let _ = write!(
         text,
         "Quorum: **{}** of **{entities}** organisations, **{needed}** needed\n\
          **{valid}** valid {}, **{abstained}** abstained, **{left_out}** not counted",
-        tally.counting,
+        tally.counting(),
         plural(valid, "vote", "votes"),
     );
     text
@@ -306,13 +301,6 @@ fn headline(tally: &Tally) -> String {
 ///
 /// `round` is the final round. Options eliminated earlier show the round they went out in
 fn rows(tally: &Tally, round: &Round) -> Vec<(String, Row)> {
-    let share = |weight: f64| {
-        if tally.total > 0.0 {
-            weight / tally.total
-        } else {
-            0.0
-        }
-    };
     let mut rows: Vec<(String, Row)> = tally
         .motion
         .options
@@ -323,7 +311,7 @@ fn rows(tally: &Tally, round: &Round) -> Vec<(String, Row)> {
                 .iter()
                 .find(|(number, _)| *number == option.number);
             let row = match score {
-                Some((_, score)) => Row::Share(share(*score)),
+                Some((_, score)) => Row::Share(tally.share(*score)),
                 None => {
                     let out = |round: &Round| round.eliminated.contains(&option.number);
                     Row::Out(tally.rounds.iter().position(out)? + 1)
@@ -332,7 +320,7 @@ fn rows(tally: &Tally, round: &Round) -> Vec<(String, Row)> {
             Some((format!("Option {}", option.number), row))
         })
         .collect();
-    let exhausted = share(tally.total - round.continuing_weight());
+    let exhausted = tally.share(tally.total - round.continuing_weight());
     if exhausted >= 0.0005 {
         rows.push(("No option left".to_string(), Row::Share(exhausted)));
     }
@@ -475,12 +463,7 @@ fn rounds(tally: &Tally) -> Vec<String> {
         lines.push(line);
 
         for (number, score) in &round.scores {
-            let share = if tally.total > 0.0 {
-                score / tally.total
-            } else {
-                0.0
-            };
-            let mut line = format!("Option {number} **{}**", percent(share));
+            let mut line = format!("Option {number} **{}**", percent(tally.share(*score)));
             let members = behind(Some(*number));
             if !members.is_empty() {
                 let _ = write!(line, ": {}", members.join(", "));

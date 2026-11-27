@@ -2276,6 +2276,7 @@ dependencies = [
  "kairi-config",
  "kameo",
  "kameo_actors",
+ "percent-encoding",
  "poise",
  "public-inbox",
  "serde",

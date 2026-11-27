@@ -26,7 +26,6 @@ pub struct Kairi {
     pub config: Arc<OnceLock<Config>>,
     pub discord_ref: Arc<OnceLock<ActorRef<DiscordActor>>>,
     pub reader_ref: Arc<OnceLock<ActorRef<PublicInboxReader>>>,
-    pub voting_ref: Arc<OnceLock<ActorRef<Voting>>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -74,7 +73,7 @@ impl Actor for Kairi {
             .spawn()
             .await;
 
-        let voting = Voting::supervise(&actor_ref, args.config.voting.clone())
+        let _voting = Voting::supervise(&actor_ref, args.config.voting.clone())
             .restart_policy(RestartPolicy::Permanent)
             .restart_limit(5, Duration::from_secs(10))
             .spawn()
@@ -94,8 +93,6 @@ impl Actor for Kairi {
         .await;
 
         let _ = kairi.reader_ref.set(public_inbox_reader);
-
-        let _ = kairi.voting_ref.set(voting);
 
         let _ = kairi.discord_ref.set(discord);
 

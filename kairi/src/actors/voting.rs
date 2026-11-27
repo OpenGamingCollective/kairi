@@ -31,9 +31,7 @@ pub struct CountVotes {
 #[derive(Debug, Clone)]
 pub struct Count {
     pub list: MailingListEnum,
-    pub uid: String,
-    pub name: String,
-    pub url: String,
+    pub thread: Thread,
     pub roster: Roster,
     pub tally: Tally,
 }
@@ -100,10 +98,7 @@ impl Message<CountVotes> for Voting {
         // Re-read on every count so it can change without a restart
         let roster = self.roster().await?;
 
-        let thread = self
-            .thread(list, &thread, &requested_by)
-            .await?
-            .ok_or(VotingError::NoSuchThread)?;
+        let thread = self.thread(list, &thread, &requested_by).await?;
         let messages = reader()?
             .ask(FetchMessages {
                 list,
@@ -136,7 +131,7 @@ impl Message<CountVotes> for Voting {
         )?;
 
         info!(
-            ballots = tally.standings.iter().map(|standing| standing.ballots.len()).sum::<usize>(),
+            ballots = tally.cast(),
             rejected = tally.rejected.len(),
             outcome = ?tally.outcome,
             open = tally.open,
@@ -144,9 +139,7 @@ impl Message<CountVotes> for Voting {
         );
         Ok(Count {
             list,
-            uid: thread.uid().to_string(),
-            name: thread.name().to_string(),
-            url: thread.url(),
+            thread,
             roster,
             tally,
         })
@@ -171,34 +164,35 @@ impl Voting {
         list: MailingListEnum,
         thread: &str,
         requested_by: &str,
-    ) -> Result<Option<Thread>, VotingError> {
+    ) -> Result<Thread, VotingError> {
         let requested_by = requested_by.to_string();
         let thread = match Reference::parse(thread) {
             Reference::Uid(uid) => {
-                let fetch = FetchThread {
-                    list,
-                    uid,
-                    requested_by,
-                };
-                reader()?.ask(fetch).await?
+                reader()?
+                    .ask(FetchThread {
+                        list,
+                        uid,
+                        requested_by,
+                    })
+                    .await?
             }
             Reference::MessageId(message_id) => {
-                let find = FindThread {
-                    list,
-                    message_id,
-                    requested_by,
-                };
-                reader()?.ask(find).await?
+                reader()?
+                    .ask(FindThread {
+                        list,
+                        message_id,
+                        requested_by,
+                    })
+                    .await?
             }
         };
-        Ok(thread)
+        thread.ok_or(VotingError::NoSuchThread)
     }
 }
 
 #[derive(Debug, PartialEq, Eq)]
 enum Reference {
     Uid(String),
-    /// Of any mail in the thread
     MessageId(String),
 }
 
@@ -208,8 +202,9 @@ impl Reference {
 
         // https://lists.example.org/<list>/<message-id>/T/#u
         if let Some((_, path)) = input.split_once("://") {
-            let message_id = path.split(['/', '#', '?']).nth(2).unwrap_or_default();
-            return Self::MessageId(percent_decode(message_id));
+            let message_id = path.split('/').nth(2).unwrap_or_default();
+            let message_id = percent_encoding::percent_decode_str(message_id).decode_utf8_lossy();
+            return Self::MessageId(message_id.into_owned());
         }
 
         let input = input.trim_start_matches('<').trim_end_matches('>');
@@ -219,30 +214,6 @@ impl Reference {
             Self::Uid(input.to_lowercase())
         }
     }
-}
-
-/// Undo the escaping public-inbox applies to Message-IDs in its URLs
-fn percent_decode(escaped: &str) -> String {
-    let mut bytes = Vec::with_capacity(escaped.len());
-    let mut rest = escaped.as_bytes();
-    while let [byte, tail @ ..] = rest {
-        let hex = tail
-            .get(..2)
-            .filter(|_| *byte == b'%')
-            .and_then(|hex| std::str::from_utf8(hex).ok())
-            .and_then(|hex| u8::from_str_radix(hex, 16).ok());
-        match hex {
-            Some(decoded) => {
-                bytes.push(decoded);
-                rest = &tail[2..];
-            }
-            None => {
-                bytes.push(*byte);
-                rest = tail;
-            }
-        }
-    }
-    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 #[cfg(test)]
@@ -275,7 +246,10 @@ mod tests {
             Reference::parse("https://l.example.org/list/a%2Fb%20c@d/T/"),
             message_id("a/b c@d")
         );
-        assert_eq!(percent_decode("100%@d%2"), "100%@d%2");
+        assert_eq!(
+            Reference::parse("https://l.example.org/list/100%@d%2/"),
+            message_id("100%@d%2")
+        );
     }
 
     #[test]
