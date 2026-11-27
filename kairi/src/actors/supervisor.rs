@@ -58,6 +58,7 @@ impl Actor for Kairi {
         let _public_inbox_mirror = PublicInboxMirror::supervise(
             &actor_ref,
             PublicInboxMirrorArgs {
+                url: args.config.public_inbox.url.clone(),
                 repositories: MailingListEnum::VARIANTS.to_vec(),
                 dir: public_inbox_dir.clone(),
             },

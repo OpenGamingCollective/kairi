@@ -91,8 +91,8 @@ pub fn tally(
     let needed = (policy.coalition_quorum * standings.len() as f64).ceil() as usize;
     let void = counting == 0 || counting < needed;
 
-    // Each voter gets an equal part of their standing's weight. Abstentions only count toward
-    // the quorums
+    // Each voter gets an equal part of their standing's weight.
+    // Abstentions get dropped here. They are unranked but helped reach quorum
     let ranked: Vec<(&[u32], f64)> = standings
         .iter()
         .filter(|s| s.passed_quorum)
@@ -106,6 +106,8 @@ pub fn tally(
                 })
         })
         .collect();
+
+    // We have to do this part because with abstentions dropped, total may no longer be 1
     let total: f64 = ranked.iter().map(|(_, share)| share).sum();
 
     let options: Vec<u32> = motion.options.iter().map(|option| option.number).collect();
@@ -359,7 +361,7 @@ mod tests {
         assert_eq!(tally.outcome, Outcome::Passed(1));
 
         let tally = count(&votes(&[("duo1", "Abstain"), ("free1", "Abstain")]));
-        assert_eq!(tally.outcome, Outcome::NoVotes);
+        assert_eq!(tally.outcome, Outcome::NoMajority);
     }
 
     #[test]
@@ -498,7 +500,7 @@ mod tests {
         // duo1 only ranked option 1. Their weight backs no option but still has to be beaten
         let pool = 2f64.sqrt() + 2f64.sqrt() + 1.0;
         assert!(close(
-            tally.rounds[1].voted(),
+            tally.rounds[1].continuing_weight(),
             1.0 - 2f64.sqrt() / 2.0 / pool
         ));
         // 3 leads with √2/2 + 1, which is short of half

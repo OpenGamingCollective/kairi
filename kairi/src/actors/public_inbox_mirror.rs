@@ -7,12 +7,13 @@ use public_inbox::Mirror;
 use tokio::{task::AbortHandle, time::MissedTickBehavior};
 use tracing::{Instrument, error};
 
-use crate::types::{LISTS_URL, MailingListEnum};
+use crate::types::MailingListEnum;
 
 pub struct PublicInboxMirror;
 
 #[derive(Debug, Clone)]
 pub struct PublicInboxMirrorArgs {
+    pub url: String,
     pub repositories: Vec<MailingListEnum>,
     /// Each list is mirrored in `<dir>/<list>`
     pub dir: PathBuf,
@@ -29,6 +30,7 @@ impl Actor for PublicInboxMirror {
     async fn on_start(args: Self::Args, actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
         for repository in args.repositories {
             let args = PublicInboxMirrorWorkerArgs {
+                url: format!("{}/{repository}", args.url.trim_end_matches('/')),
                 list: repository,
                 dir: args.dir.join(repository.to_string()),
             };
@@ -42,6 +44,7 @@ impl Actor for PublicInboxMirror {
 
 #[derive(Debug, Clone)]
 struct PublicInboxMirrorWorkerArgs {
+    url: String,
     list: MailingListEnum,
     dir: PathBuf,
 }
@@ -66,8 +69,7 @@ impl Actor for PublicInboxMirrorWorker {
     }
 
     async fn on_start(args: Self::Args, actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
-        let PublicInboxMirrorWorkerArgs { list, dir } = args;
-        let url = format!("{LISTS_URL}/{list}");
+        let PublicInboxMirrorWorkerArgs { url, list, dir } = args;
 
         let inbox = Mirror::open(&url, dir, crate::USER_AGENT)?;
 

@@ -6,15 +6,13 @@ const EPSILON: f64 = 1e-9;
 /// A round of instant runoff
 #[derive(Debug, Clone, PartialEq)]
 pub struct Round {
-    /// Share behind each option still in the race
     pub scores: Vec<(u32, f64)>,
-    /// Options eliminated after this round
     pub eliminated: Vec<u32>,
 }
 
 impl Round {
-    /// Weight behind the options still in the race
-    pub fn voted(&self) -> f64 {
+    /// Total weight continuing after this round
+    pub fn continuing_weight(&self) -> f64 {
         self.scores.iter().map(|(_, score)| score).sum()
     }
 }
@@ -22,10 +20,12 @@ impl Round {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Outcome {
     Passed(u32),
+    /// No option got more than half of the weight after runoff
     NoMajority,
+    /// All remaining options tied
     Tied,
+    /// Did not reach coalition quorum
     Void,
-    NoVotes,
 }
 
 /// Do instant runoff magic. Too much to explain. Refer to governance docs
@@ -38,7 +38,6 @@ pub(crate) fn runoff(
     let mut rounds = Vec::new();
 
     loop {
-        // Each ballot backs its highest ranked option still running
         let scores = running
             .iter()
             .map(|option| {
@@ -62,12 +61,8 @@ pub(crate) fn runoff(
             rounds.push(round);
             return (rounds, Outcome::Passed(winner));
         }
-        // The last remaining option only gets a round if it passes
-        if round.scores.len() == 1 {
-            return (rounds, Outcome::NoMajority);
-        }
 
-        // Options tied for last are eliminated together
+        // options tied for last are eliminated together
         let lowest = round
             .scores
             .iter()
@@ -80,11 +75,13 @@ pub(crate) fn runoff(
             .map(|(option, _)| *option)
             .collect();
 
-        let outcome = if round.voted() <= EPSILON {
-            Some(Outcome::NoVotes)
-        } else if eliminated.len() == round.scores.len() {
+        let options_left = round.scores.len();
+        let all_tied_for_last = eliminated.len() == options_left;
+        let has_continuing_ballots = round.continuing_weight() > EPSILON;
+
+        let outcome = if all_tied_for_last && has_continuing_ballots && options_left > 1 {
             Some(Outcome::Tied)
-        } else if round.scores.len() == 2 {
+        } else if !has_continuing_ballots || options_left <= 2 {
             Some(Outcome::NoMajority)
         } else {
             None

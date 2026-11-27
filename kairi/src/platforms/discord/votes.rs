@@ -152,7 +152,7 @@ fn colour(tally: &Tally) -> u32 {
     match tally.outcome {
         _ if tally.open => ORANGE,
         Outcome::Passed(_) => GREEN,
-        Outcome::NoMajority | Outcome::Tied | Outcome::Void | Outcome::NoVotes => RED,
+        Outcome::NoMajority | Outcome::Tied | Outcome::Void => RED,
     }
 }
 
@@ -291,7 +291,6 @@ fn headline(tally: &Tally) -> String {
         Outcome::Tied => "**Tied**, the vote has to be held again".to_string(),
         Outcome::Void if tally.open => "**No quorum** yet".to_string(),
         Outcome::Void => "**Void**, not enough organisations reached quorum".to_string(),
-        Outcome::NoVotes => "**No votes** for any option".to_string(),
     };
 
     let closes = tally.motion.closes.as_second();
@@ -333,7 +332,7 @@ fn rows(tally: &Tally, round: &Round) -> Vec<(String, Row)> {
             Some((format!("Option {}", option.number), row))
         })
         .collect();
-    let exhausted = share(tally.total - round.voted());
+    let exhausted = share(tally.total - round.continuing_weight());
     if exhausted >= 0.0005 {
         rows.push(("No option left".to_string(), Row::Share(exhausted)));
     }

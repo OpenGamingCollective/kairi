@@ -12,6 +12,22 @@ pub struct ConfigFile {
     pub typesafe: TypesafeConfigFile,
     #[serde(default)]
     pub voting: VotingConfig,
+    #[serde(default)]
+    pub public_inbox: PublicInboxConfig,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(default)]
+pub struct PublicInboxConfig {
+    pub url: String,
+}
+
+impl Default for PublicInboxConfig {
+    fn default() -> Self {
+        Self {
+            url: "https://lists.opengamingcollective.org".to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Default, Deserialize, Serialize, Clone)]
@@ -59,6 +75,8 @@ pub struct Config {
     pub typesafe: TypesafeConfig,
     #[serde(default)]
     pub voting: VotingConfig,
+    #[serde(default)]
+    pub public_inbox: PublicInboxConfig,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize, Clone)]
@@ -126,6 +144,7 @@ impl Config {
                 token: typesafe_token,
             },
             voting,
+            public_inbox: config_file.public_inbox,
         })
     }
 }
